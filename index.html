@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mt. Bachelor 3D</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Inter:wght@400;500;600&display=swap" />
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <div id="vignette"></div>
+    <div id="labels"></div>
+
+    <header class="brand">
+      <h1>Mt. Bachelor</h1>
+      <p>3D trail map · build 0.1</p>
+    </header>
+
+    <aside id="panel">
+      <section>
+        <h2>Views</h2>
+        <div class="views">
+          <button data-view="trail-map">Trail map</button>
+          <button data-view="summit">Summit</button>
+          <button data-view="west-village">West Village</button>
+          <button data-view="sunrise">Sunrise</button>
+          <button data-view="nordic">Nordic Center</button>
+          <button data-view="backside">Outback / NW</button>
+        </div>
+      </section>
+      <section>
+        <h2>Lifts</h2>
+        <ul id="lift-list"></ul>
+      </section>
+      <section class="toggles">
+        <h2>Show</h2>
+        <label><input type="checkbox" data-toggle="labels" checked /> Labels <kbd>L</kbd></label>
+        <label><input type="checkbox" data-toggle="trees" checked /> Trees</label>
+        <label><input type="checkbox" data-toggle="chairs" checked /> Moving chairs</label>
+        <label><input type="checkbox" data-toggle="map" /> Trail map overlay <kbd>M</kbd></label>
+      </section>
+    </aside>
+
+    <div id="ref" hidden>
+      <img src="./reference/trail-map.webp" alt="Mt. Bachelor trail map" />
+      <i id="ref-dot" hidden></i>
+    </div>
+
+    <div id="hud">
+      <div><b>Cursor</b> <span class="cursor">—</span></div>
+      <div><b>Camera</b> <span class="camera">—</span></div>
+      <div class="help">Drag to orbit · right-drag to pan · scroll to zoom · <kbd>1</kbd> trail-map view</div>
+    </div>
+
+    <div id="ride-hud" hidden>
+      <span></span>
+      <em><kbd>+</kbd>/<kbd>−</kbd> speed · <kbd>Esc</kbd> hop off</em>
+    </div>
+
+    <div id="loading">
+      <div class="spinner"></div>
+      <p>Loading…</p>
+    </div>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
