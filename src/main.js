@@ -242,9 +242,11 @@ droneButton.addEventListener('click', () => (drone.active ? endDrone() : startDr
 
 // ---------------------------------------------------------------- ski mode
 const ski = createSki({
-  scene, camera, canvas, world,
+  scene, camera, world,
   surfaceAt: parks.surfaceAt,
   treeNear: forest.treeNear,
+  grindables: parks.grindables,
+  lifts,
   hud: $('#ski-hud'),
 });
 const skiButton = $('#ski-toggle');

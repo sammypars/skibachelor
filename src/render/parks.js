@@ -131,11 +131,13 @@ function hipProfile(J, side, tA) {
 }
 
 // Little take-off deck in front of a rail or box.
-const jibDeck = {
+// Built up to just under the feature's start so you ride straight onto it.
+const deckFor = (H) => ({
   length: 5,
-  height: 0.7,
-  h: (a) => (a < 3 ? 0.7 * smooth(a / 3) : a < 4.2 ? 0.7 : 0.7 * (1 - smooth((a - 4.2) / 0.8))),
-};
+  height: H,
+  h: (a) => (a < 3 ? H * smooth(a / 3) : a < 4.2 ? H : H * (1 - smooth((a - 4.2) / 0.8))),
+});
+const jibDeck = deckFor(0.7);
 
 // Smooth whoops.
 const rollers = (n, H, span) => ({
@@ -629,6 +631,32 @@ export function buildParks(world) {
     }
   };
 
+  // Things you can slide: polylines along the top surface (ps are the
+  // centerline points; top = y + lift), half-width of the slide surface.
+  const grindables = [];
+  const grind = (ps, lift, halfWidth, name) => {
+    grindables.push({ pts: ps.map((p) => p.clone().setY(p.y + lift)), halfWidth, name });
+  };
+  // Blue dye line sprayed across a lip or knuckle so riders can read it:
+  // a thin strip on the snow from side to side at distance a into a jump.
+  const dye = [];
+  const dyeLine = (run, s, a, off, width, prof) => {
+    const pos = [];
+    const idx = [];
+    const N = 8;
+    for (let k = 0; k <= N; k++) {
+      const c = -width / 2 + (width * k) / N;
+      for (const da of [-0.18, 0.18]) {
+        const p = at(run, s + a + da, off + c, 0);
+        pos.push(p.x, p.y + prof.h(a + da) - 0.12, p.z);
+      }
+      if (k) idx.push((k - 1) * 2, (k - 1) * 2 + 1, k * 2, (k - 1) * 2 + 1, k * 2 + 1, k * 2);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setIndex(idx);
+    dye.push(g);
+  };
   // Small yellow marker block on the snow (h = snow built up there).
   // Fall-line slope (tan) under a feature: average over `len` meters.
   const slopeAt = (run, s, off, len) => {
@@ -655,6 +683,8 @@ export function buildParks(world) {
         const prof = jumpProfile(J, slopeAt(run, s, off, 30));
         snow.drape(run, s, off, J.W, prof);
         jumps.push({ run, s, off, prof, size: variant });
+        dyeLine(run, s, prof.lip.x - 0.2, off, J.W, prof);
+        dyeLine(run, s, prof.knuckle, off, J.W, prof);
         // Yellow markers either side of the lip; flags on the big ones.
         for (const side of [-1, 1]) marker(run, s + prof.lip.x - 0.4, off + side * (J.W / 2 + 0.6), J.H * 0.9);
         if (J.H >= 1.4) flag(run, s + prof.lip.x, off - J.W / 2 - 2, J.H * 0.7);
@@ -669,11 +699,12 @@ export function buildParks(world) {
       case 'roof': {
         // A-frame rooftop: a takeoff deck, then the timber roof down the
         // fall line with its eaves sunk in the snow.
-        snow.drape(run, s, off, 3.4, jibDeck);
+        snow.drape(run, s, off, 3.4, deckFor(0.75));
         const a = at(run, s + 4.4, off, -0.15);
         const b = at(run, s + 11.4, off, -0.15);
         roofs.push(roofGeometry(a, b, 1.1, 0.95));
         steel.push(spanTube(a.clone().setY(a.y + 0.95), b.clone().setY(b.y + 0.95), 0.06));
+        grind([a.clone().setY(a.y + 0.95), b.clone().setY(b.y + 0.95)], 0.06, 0.08, 'A-frame');
         marker(run, s + 3.2, off);
         return 12;
       }
@@ -701,9 +732,10 @@ export function buildParks(world) {
         snow.drape(run, s, off, 9, spineProfile);
         return spineProfile.length;
       case 'rail': {
-        if (variant !== 'rainbow') snow.drape(run, s, off, 3.2, jibDeck);
+        if (variant !== 'rainbow') snow.drape(run, s, off, 3.2, deckFor(RAILS[variant][0][1] - 0.05));
         const s1 = s + (variant === 'rainbow' ? 0 : 4.2);
         const ps = chain(run, s1, off, RAILS[variant], (a, b) => steel.push(spanTube(a, b, 0.055)));
+        grind(ps, 0.055, 0.06, variant === 'rainbow' ? 'rainbow rail' : `${variant === 'dfd' ? 'down-flat-down' : variant} rail`);
         postsUnder(ps.filter((_, i) => i === 0 || i === ps.length - 1 || i % 2 === 0), 0.09);
         // Yellow end cap on the rail's nose, and a marker beside the takeoff.
         yellow.push(new THREE.SphereGeometry(0.075, 8, 6).translate(ps[0].x, ps[0].y, ps[0].z));
@@ -712,12 +744,13 @@ export function buildParks(world) {
       }
       case 'box': {
         const rideOn = variant === 'ride-on';
-        if (!rideOn) snow.drape(run, s, off, 3.4, jibDeck);
+        if (!rideOn) snow.drape(run, s, off, 3.4, deckFor(BOXES[variant][0][1] - 0.05));
         const s1 = s + (rideOn ? 0 : 4.2);
         const ps = chain(run, s1, off, BOXES[variant], (a, b) => {
           const d = new THREE.Vector3(0, rideOn ? 0.15 : 0.25, 0);
           boxMeshes.push(boxSegment(a.clone().sub(d), b.clone().sub(d), rideOn ? 0.8 : 0.6, rideOn ? 0.3 : 0.5, boxMats));
         });
+        grind(ps, 0, rideOn ? 0.4 : 0.3, 'box');
         if (!rideOn) postsUnder(ps, 0.4);
         marker(run, s1 - 1.2, off);
         return s1 - s + BOXES[variant].at(-1)[0];
@@ -730,6 +763,7 @@ export function buildParks(world) {
           boxMeshes.push(boxSegment(a.clone().sub(d), b.clone().sub(d), 1.5, 0.8, boxMats));
           steel.push(spanTube(a, b, 0.045)); // coping on the deck edge
         });
+        grind(ps, 0, 0.75, 'battleship');
         postsUnder([ps[1], ps[2]], 0.5);
         return s1 - s + 10;
       }
@@ -769,6 +803,7 @@ export function buildParks(world) {
       }
       case 'log': {
         const ps = chain(run, s, off, [[0, 0.3], [9, 0.3]], (a, b) => wood.push(spanTube(a, b, 0.32)));
+        grind(ps, 0.32, 0.25, 'log');
         postsUnder(ps, 0.3);
         return 9;
       }
@@ -858,6 +893,7 @@ export function buildParks(world) {
   addList(wood, std(0x6b4a2e, { roughness: 0.9 }));
   addList(plywood, new THREE.MeshStandardMaterial({ map: plankTexture('#b98a52'), roughness: 0.85 }));
   addList(roofs, new THREE.MeshStandardMaterial({ map: plankTexture(), roughness: 0.85, side: THREE.DoubleSide }));
+  addList(dye, new THREE.MeshBasicMaterial({ color: 0x2b7bd6, transparent: true, opacity: 0.75, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, side: THREE.DoubleSide }));
   addList(yellow, std(0xffc20e, { roughness: 0.45, emissive: 0x6a4c00 }));
   addList(flagPoles, std(0x1c1e21));
   addList(flags, std(0xffc20e, { side: THREE.DoubleSide, emissive: 0x6a4c00 }));
@@ -875,5 +911,5 @@ export function buildParks(world) {
   });
   // Snow surface height anywhere: natural ground or the shaped park snow.
   const surfaceAt = (x, z) => Math.max(hf.heightAt(x, z), snowTiles.at(x, z));
-  return { group, parks, jumps, surfaceAt };
+  return { group, parks, jumps, grindables, surfaceAt };
 }

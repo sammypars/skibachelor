@@ -25,8 +25,22 @@ const BOARDER_SHARE = 0.25;
 // ------------------------------------------------------------------ figures
 // Each body part: a box with a vertex color, positioned and tilted. Figures
 // face +z with feet at y = 0.
+// Rounded where it should be: long upright parts (limbs, torsos, poles)
+// become capsules, near-cubes (heads, helmets) become spheres, flat things
+// (skis, boards) stay boxes.
+function shape(w, h, d) {
+  const lo = Math.min(w, d);
+  const hi = Math.max(w, d);
+  if (h > 1.2 * lo && h >= hi * 0.9) {
+    const r = lo / 2;
+    return new THREE.CapsuleGeometry(r, Math.max(0.001, h - 2 * r), 2, 6).scale(w / (2 * r), 1, d / (2 * r));
+  }
+  if (Math.max(w, h, d) < 1.3 * Math.min(w, h, d)) return new THREE.SphereGeometry(0.5, 8, 6).scale(w * 1.1, h * 1.1, d * 1.1);
+  return new THREE.BoxGeometry(w, h, d);
+}
+
 function piece(w, h, d, x, y, z, color, rx = 0, rz = 0, ry = 0) {
-  const g = new THREE.BoxGeometry(w, h, d);
+  const g = shape(w, h, d);
   g.rotateX(rx).rotateZ(rz).rotateY(ry).translate(x, y, z);
   const c = new THREE.Color(color);
   const n = g.attributes.position.count;
@@ -59,7 +73,7 @@ export function skierParts() {
   ];
   const skin = [
     piece(0.2, 0.18, 0.2, 0, 1.47, 0.23, SKIN),
-    piece(0.21, 0.07, 0.05, 0, 1.52, 0.34, 0x30363d), // goggles
+    piece(0.21, 0.07, 0.05, 0, 1.52, 0.34, 0xff7a1a), // goggles (mirrored orange)
   ];
   return { jacket, gear, skin };
 }

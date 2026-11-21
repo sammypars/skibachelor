@@ -602,3 +602,22 @@ body.skiing #labels {
     display: none;
   }
 }
+
+.ski-prompt {
+  position: absolute;
+  left: 50%;
+  bottom: 150px;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  background: rgba(19, 20, 22, 0.85);
+  color: #fff;
+  border: 2px solid #ffc20e;
+  border-radius: 999px;
+  padding: 8px 18px;
+  font: 800 18px 'Barlow Condensed', Impact, sans-serif;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+.ski-prompt[hidden] {
+  display: none;
+}

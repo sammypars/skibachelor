@@ -30,6 +30,8 @@ Skiing:
 - `S` (or `↓`): brake, backflip in the air. Spin and flip together for a cork.
 - `Space`: hold to load, release to pop. Kickers launch you on their own; a loaded pop spins and flips faster.
 - `Shift`: grab · `R`: back to your last good spot · `Esc`: stop skiing
+- Rails, boxes, the battleship, A-frames and logs: land on them or ride up the deck onto them to slide. `A`/`D` turns you between a 50-50 and a boardslide; `Space` pops you off.
+- `E` at the bottom of a lift: ride the chair up (`E` again skips to the top).
 - On a phone or tablet, use the on-screen pad and the **POP** button.
 
 Let go of a spin or flip and it carries on to the next full 180 or full
@@ -38,7 +40,10 @@ switch) and your feet under you, or you crash. The physics: gravity along
 the real snow surface (terrain plus the shaped park snow), snow friction,
 air drag (half as much in a tuck), ski edges that grip sideways so the skis
 carve the velocity round, and a ballistic flight whenever the snow drops
-away faster than gravity can follow (`src/ski.js`).
+away faster than gravity can follow (`src/ski.js`). On a rail it's gravity
+along the rail with low sliding friction. The skier (`src/skier-model.js`)
+is jointed so it crouches, absorbs landings, tucks, grabs and sits on the
+chair; `src/ski-fx.js` adds the snow spray and the ski tracks.
 
 ## How the map is built
 
