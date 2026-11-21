@@ -23,109 +23,199 @@ const smooth01 = (t) => t * t * (3 - 2 * t);
 const BOARDER_SHARE = 0.25;
 
 // ------------------------------------------------------------------ figures
-// Each body part: a box with a vertex color, positioned and tilted. Figures
-// face +z with feet at y = 0.
-// Rounded where it should be: long upright parts (limbs, torsos, poles)
-// become capsules, near-cubes (heads, helmets) become spheres, flat things
-// (skis, boards) stay boxes.
-function shape(w, h, d) {
-  const lo = Math.min(w, d);
-  const hi = Math.max(w, d);
-  if (h > 1.2 * lo && h >= hi * 0.9) {
-    const r = lo / 2;
-    return new THREE.CapsuleGeometry(r, Math.max(0.001, h - 2 * r), 2, 6).scale(w / (2 * r), 1, d / (2 * r));
-  }
-  if (Math.max(w, h, d) < 1.3 * Math.min(w, h, d)) return new THREE.SphereGeometry(0.5, 8, 6).scale(w * 1.1, h * 1.1, d * 1.1);
-  return new THREE.BoxGeometry(w, h, d);
-}
-
-function piece(w, h, d, x, y, z, color, rx = 0, rz = 0, ry = 0) {
-  const g = shape(w, h, d);
-  g.rotateX(rx).rotateZ(rz).rotateY(ry).translate(x, y, z);
+// Figures are built from a jointed pose: tapered limbs between joints,
+// rounded joints, boots, gloves, a hooded jacket, helmet and goggles. Each
+// part carries a vertex colour; parts are merged into four instanced meshes
+// (jacket, pants and gear, skin and goggles, helmet) that share one
+// transform per person. Figures face +z with the feet at y = 0.
+const V = (x, y, z) => new THREE.Vector3(x, y, z);
+const _q = new THREE.Quaternion();
+const _up = new THREE.Vector3(0, 1, 0);
+function colored(g, color) {
   const c = new THREE.Color(color);
   const n = g.attributes.position.count;
   const col = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) col.set([c.r, c.g, c.b], i * 3);
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  return g;
+  return g.index ? g : g;
 }
+// A tapered limb from a to b; sz squashes it front-to-back (torsos).
+function seg(a, b, r0, r1, color, { sz = 1, radial = 7, caps = false } = {}) {
+  const d = b.clone().sub(a);
+  const len = d.length();
+  const g = new THREE.CylinderGeometry(r1, r0, len, radial, 1, !caps).translate(0, len / 2, 0).scale(1, 1, sz);
+  g.applyQuaternion(_q.setFromUnitVectors(_up, d.normalize()));
+  g.translate(a.x, a.y, a.z);
+  return colored(g, color);
+}
+function ball(c, r, color, sx = 1, sy = 1, sz = 1, w = 8, h = 6, phi = Math.PI) {
+  const g = new THREE.SphereGeometry(r, w, h, 0, Math.PI * 2, 0, phi).scale(sx, sy, sz).translate(c.x, c.y, c.z);
+  return colored(g, color);
+}
+function block(w, h, d, c, color, rx = 0, ry = 0, rz = 0) {
+  const g = new THREE.BoxGeometry(w, h, d).rotateX(rx).rotateZ(rz).rotateY(ry).translate(c.x, c.y, c.z);
+  return colored(g, color);
+}
+// Goggles: an open band round the front of the head.
+function goggles(c, r, color) {
+  const g = new THREE.CylinderGeometry(r, r, 0.062, 10, 1, true, -1.0, 2.0).translate(c.x, c.y, c.z);
+  return colored(g, color);
+}
+// Older code builds simple pieces with this; keep it for other figures.
+function piece(w, h, d, x, y, z, color, rx = 0, rz = 0, ry = 0) {
+  return block(w, h, d, V(x, y, z), color, rx, ry, rz);
+}
+void piece;
 const WHITE = 0xffffff;
 const DARK = 0x1a1d21;
-const SKIN = 0xe0b394;
+const SKIN = 0xd9a888;
+const GOGGLE = 0xff7a1a;
+const BOOT = 0xe9ecef;
 
-// Skier in an athletic stance: knees bent, leaning forward, poles back.
-export function skierParts() {
-  const jacket = [
-    piece(0.42, 0.58, 0.26, 0, 1.1, 0.06, WHITE, 0.3),
-    piece(0.11, 0.5, 0.12, 0.27, 1.05, 0.16, WHITE, -0.6, 0.15),
-    piece(0.11, 0.5, 0.12, -0.27, 1.05, 0.16, WHITE, -0.6, -0.15),
-  ];
-  const gear = [
-    piece(0.16, 0.5, 0.18, 0.12, 0.62, 0.1, WHITE, 0.55), // thighs (pants)
-    piece(0.16, 0.5, 0.18, -0.12, 0.62, 0.1, WHITE, 0.55),
-    piece(0.15, 0.42, 0.17, 0.12, 0.25, 0.05, WHITE, -0.35), // shins
-    piece(0.15, 0.42, 0.17, -0.12, 0.25, 0.05, WHITE, -0.35),
-    piece(0.27, 0.27, 0.29, 0, 1.55, 0.2, WHITE), // helmet
-    piece(0.1, 0.03, 1.7, 0.12, 0.02, 0.1, DARK), // skis
-    piece(0.1, 0.03, 1.7, -0.12, 0.02, 0.1, DARK),
-    piece(0.025, 1.15, 0.025, 0.36, 0.55, -0.05, DARK, -0.45), // poles
-    piece(0.025, 1.15, 0.025, -0.36, 0.55, -0.05, DARK, -0.45),
-  ];
-  const skin = [
-    piece(0.2, 0.18, 0.2, 0, 1.47, 0.23, SKIN),
-    piece(0.21, 0.07, 0.05, 0, 1.52, 0.34, 0xff7a1a), // goggles (mirrored orange)
-  ];
-  return { jacket, gear, skin };
+// Upper body from the pelvis up: jacket, hood, arms, head, helmet, goggles.
+function upperBody(out, { pelvis, chest, head, shoulders, elbows, hands, lean = 0 }) {
+  const { jacket, skin, helmet } = out;
+  // Jacket: hem over the seat up to the shoulders, slightly flattened.
+  jacket.push(seg(pelvis.clone().add(V(0, -0.1, -0.02 * Math.sign(lean || 1))), chest, 0.2, 0.205, WHITE, { sz: 0.74, radial: 10, caps: true }));
+  jacket.push(ball(chest, 0.205, WHITE, 1, 0.5, 0.74, 10, 6));
+  // Hood bunched behind the neck, gaiter.
+  const neck = chest.clone().lerp(head, 0.45);
+  jacket.push(ball(neck.clone().add(V(0, 0, -0.09)), 0.1, WHITE, 1.35, 0.7, 0.85));
+  jacket.push(seg(neck.clone().add(V(0, -0.04, 0)), neck.clone().add(V(0, 0.08, 0.01)), 0.09, 0.085, DARK, { caps: false }));
+  // Arms.
+  for (let k = 0; k < 2; k++) {
+    const S = shoulders[k];
+    const E = elbows[k];
+    const H = hands[k];
+    jacket.push(ball(S, 0.075, WHITE));
+    jacket.push(seg(S, E, 0.072, 0.066, WHITE));
+    jacket.push(ball(E, 0.062, WHITE, 1, 1, 1, 6, 5));
+    jacket.push(seg(E, H.clone().lerp(E, 0.15), 0.062, 0.06, WHITE));
+    skin.push(ball(H, 0.054, DARK, 0.9, 1.25, 1.1, 7, 5)); // glove
+  }
+  // Head, helmet, goggles.
+  skin.push(ball(head, 0.1, SKIN, 0.92, 1.1, 1.0));
+  helmet.push(ball(head.clone().add(V(0, 0.035, -0.012)), 0.133, WHITE, 1.0, 0.98, 1.12, 10, 6, Math.PI * 0.6));
+  skin.push(goggles(head.clone().add(V(0, 0.02, 0.008)), 0.138, GOGGLE));
 }
 
-// Snowboarder: board across the direction of travel, body turned sideways.
+function legs(out, { hips, knees, ankles, toe = V(0, 0, 1) }) {
+  const { gear } = out;
+  for (let k = 0; k < 2; k++) {
+    const H = hips[k];
+    const K = knees[k];
+    const A = ankles[k];
+    // Boot: shell and cuff.
+    gear.push(ball(A.clone().add(V(0, -0.05, 0)).addScaledVector(toe, 0.04), 0.5, BOOT, 0.12, 0.14, 0.32, 8, 5, Math.PI / 2));
+    gear.push(seg(A.clone().add(V(0, -0.06, 0)), A.clone().add(V(0, 0.12, 0)), 0.078, 0.07, BOOT, { caps: false }));
+    // Baggy pants over the boot.
+    gear.push(seg(A.clone().add(V(0, 0.06, 0)), K, 0.098, 0.09, WHITE));
+    gear.push(ball(K, 0.092, WHITE));
+    gear.push(seg(K, H, 0.098, 0.118, WHITE));
+  }
+  gear.push(ball(hips[0].clone().lerp(hips[1], 0.5), 0.16, WHITE, 1.15, 0.85, 0.95));
+}
+
+function ski(c, color = DARK) {
+  // Base with upturned twin tips.
+  return [
+    block(0.1, 0.022, 1.45, c, color),
+    block(0.1, 0.02, 0.22, c.clone().add(V(0, 0.035, 0.81)), color, -0.4),
+    block(0.1, 0.02, 0.18, c.clone().add(V(0, 0.03, -0.79)), color, 0.35),
+  ];
+}
+function pole(hand, tip) {
+  return [seg(hand.clone().add(V(0, 0.06, 0)), tip, 0.011, 0.008, DARK, { radial: 5, caps: false }), ball(tip.clone().lerp(hand, 0.09), 0.04, DARK, 1, 0.12, 1, 7, 2)];
+}
+
+// Skier in an athletic stance: knees bent, chest forward, hands up, poles
+// trailing.
+export function skierParts() {
+  const out = { jacket: [], gear: [], skin: [], helmet: [] };
+  const sides = [-1, 1];
+  legs(out, {
+    hips: sides.map((s) => V(s * 0.1, 0.86, 0.0)),
+    knees: sides.map((s) => V(s * 0.125, 0.5, 0.2)),
+    ankles: sides.map((s) => V(s * 0.12, 0.13, 0.02)),
+  });
+  upperBody(out, {
+    pelvis: V(0, 0.88, -0.02),
+    chest: V(0, 1.33, 0.19),
+    head: V(0, 1.56, 0.28),
+    shoulders: sides.map((s) => V(s * 0.2, 1.33, 0.17)),
+    elbows: sides.map((s) => V(s * 0.29, 1.1, 0.3)),
+    hands: sides.map((s) => V(s * 0.3, 1.0, 0.5)),
+    lean: 1,
+  });
+  for (const s of sides) {
+    out.gear.push(...ski(V(s * 0.12, 0.02, 0.08)));
+    out.gear.push(...pole(V(s * 0.3, 1.0, 0.5), V(s * 0.38, 0.05, -0.3)));
+  }
+  return out;
+}
+
+// Snowboarder: board along the travel, body side-on, knees bent, arms out
+// along the board for balance. Built facing +z with the feet along x, then
+// turned side-on.
 export function boarderParts() {
-  const turn = Math.PI / 2.4;
-  const jacket = [
-    piece(0.42, 0.6, 0.26, 0, 1.12, 0, WHITE, 0.15, 0, turn),
-    piece(0.11, 0.55, 0.12, 0, 1.1, 0.32, WHITE, -1.1, 0, turn),
-    piece(0.11, 0.55, 0.12, 0, 1.1, -0.32, WHITE, 1.1, 0, turn),
-  ];
-  const gear = [
-    piece(0.17, 0.85, 0.2, 0, 0.45, 0.18, WHITE, 0.15, 0, turn),
-    piece(0.17, 0.85, 0.2, 0, 0.45, -0.18, WHITE, -0.15, 0, turn),
-    piece(0.27, 0.27, 0.29, 0, 1.58, 0, WHITE),
-    piece(1.5, 0.04, 0.28, 0, 0.03, 0, DARK, 0, 0, turn), // board
-  ];
-  const skin = [piece(0.2, 0.18, 0.2, 0, 1.5, 0.04, SKIN), piece(0.21, 0.07, 0.05, 0, 1.55, 0.14, 0x30363d)];
-  return { jacket, gear, skin };
+  const out = { jacket: [], gear: [], skin: [], helmet: [] };
+  const sides = [-1, 1];
+  legs(out, {
+    hips: sides.map((s) => V(s * 0.11, 0.82, 0.0)),
+    knees: sides.map((s) => V(s * 0.24, 0.47, 0.13)),
+    ankles: sides.map((s) => V(s * 0.25, 0.12, 0.0)),
+  });
+  upperBody(out, {
+    pelvis: V(0, 0.84, -0.02),
+    chest: V(0, 1.3, 0.12),
+    head: V(0.04, 1.54, 0.18),
+    shoulders: sides.map((s) => V(s * 0.2, 1.3, 0.11)),
+    elbows: sides.map((s) => V(s * 0.4, 1.12, 0.16)),
+    hands: sides.map((s) => V(s * 0.56, 1.02, 0.17)),
+  });
+  // Board with kicked-up nose and tail.
+  out.gear.push(block(1.3, 0.025, 0.28, V(0, 0.02, 0), DARK));
+  for (const s of sides) out.gear.push(block(0.22, 0.022, 0.27, V(s * 0.74, 0.05, 0), DARK, 0, 0, s * 0.32));
+  const turn = Math.PI / 2 - 0.26;
+  for (const k of ['jacket', 'gear', 'skin', 'helmet']) for (const g of out[k]) g.rotateY(turn);
+  return out;
 }
 
 // Seated on a chair (origin at the seat, facing +z), skis dangling.
 function riderParts() {
-  const jacket = [
-    piece(0.4, 0.55, 0.26, 0, 0.36, -0.05, WHITE, -0.1),
-    piece(0.11, 0.45, 0.12, 0.25, 0.3, 0.05, WHITE, -0.5),
-    piece(0.11, 0.45, 0.12, -0.25, 0.3, 0.05, WHITE, -0.5),
-  ];
-  const gear = [
-    piece(0.16, 0.16, 0.48, 0.11, 0.1, 0.24, WHITE), // thighs
-    piece(0.16, 0.16, 0.48, -0.11, 0.1, 0.24, WHITE),
-    piece(0.15, 0.48, 0.17, 0.11, -0.16, 0.48, WHITE), // shins
-    piece(0.15, 0.48, 0.17, -0.11, -0.16, 0.48, WHITE),
-    piece(0.27, 0.27, 0.29, 0, 0.8, 0),
-    piece(0.1, 0.03, 1.7, 0.11, -0.42, 0.75, DARK, -0.25),
-    piece(0.1, 0.03, 1.7, -0.11, -0.42, 0.75, DARK, -0.25),
-  ];
-  const skin = [piece(0.2, 0.18, 0.2, 0, 0.72, 0.04, SKIN), piece(0.21, 0.07, 0.05, 0, 0.77, 0.15, 0x30363d)];
-  return { jacket, gear, skin };
+  const out = { jacket: [], gear: [], skin: [], helmet: [] };
+  const sides = [-1, 1];
+  legs(out, {
+    hips: sides.map((s) => V(s * 0.1, 0.06, 0.0)),
+    knees: sides.map((s) => V(s * 0.11, 0.08, 0.44)),
+    ankles: sides.map((s) => V(s * 0.11, -0.34, 0.5)),
+  });
+  upperBody(out, {
+    pelvis: V(0, 0.08, -0.04),
+    chest: V(0, 0.52, -0.1),
+    head: V(0, 0.76, -0.06),
+    shoulders: sides.map((s) => V(s * 0.2, 0.52, -0.1)),
+    elbows: sides.map((s) => V(s * 0.26, 0.3, 0.02)),
+    hands: sides.map((s) => V(s * 0.18, 0.16, 0.26)),
+    lean: -1,
+  });
+  for (const s of sides) {
+    for (const g of ski(V(0, 0, 0))) out.gear.push(g.rotateX(-0.25).translate(s * 0.11, -0.43, 0.62));
+  }
+  return out;
 }
 
 const JACKETS = [0xd7262e, 0x1f5fbf, 0xf26b21, 0x16a34a, 0xfacc15, 0x7c3aed, 0x0ea5e9, 0xec4899, 0x111827, 0xf8fafc, 0x14b8a6, 0x9a3412];
 const PANTS = [0x1f2937, 0x111827, 0x374151, 0x1e3a8a, 0x3f3f46, 0xe5e7eb, 0x7c2d12];
 const JACKET_C = JACKETS.map((c) => new THREE.Color(c));
+const HELMETS_C = [0xf4f6f8, 0x15171a, 0xf4f6f8, 0x2b2f36, 0xd7262e, 0x1f5fbf, 0xffc20e, 0x8a9199].map((c) => new THREE.Color(c));
 const PANTS_C = PANTS.map((c) => new THREE.Color(c));
 
 // A person drawn as three instanced meshes sharing transforms.
 export class Crowd {
   constructor(parts, capacity) {
-    const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
-    this.meshes = ['jacket', 'gear', 'skin'].map((k) => {
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.72 });
+    this.meshes = ['jacket', 'gear', 'skin', 'helmet'].filter((k) => parts[k]?.length).map((k) => {
       const m = new THREE.InstancedMesh(mergeGeometries(parts[k]), mat, capacity);
       m.castShadow = true;
       m.frustumCulled = false;
@@ -135,14 +225,16 @@ export class Crowd {
     this.white = new THREE.Color(1, 1, 1);
   }
   set(i, matrix, jacket, pants) {
-    const [j, g, s] = this.meshes;
+    const [j, g, s, h] = this.meshes;
     j.setMatrixAt(i, matrix);
     g.setMatrixAt(i, matrix);
     s.setMatrixAt(i, matrix);
+    h?.setMatrixAt(i, matrix);
     if (jacket) {
       j.setColorAt(i, jacket);
       g.setColorAt(i, pants);
       s.setColorAt(i, this.white);
+      if (h) h.setColorAt(i, HELMETS_C[Math.floor((jacket.r * 7 + pants.g * 13 + i * 0.37) * 10) % HELMETS_C.length]);
     }
   }
   finish(count) {

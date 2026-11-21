@@ -505,6 +505,23 @@ body.flying #panel:hover {
   font-size: 20px;
   font-weight: 700;
 }
+.ski-live {
+  position: absolute;
+  top: 34%;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 26px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #fff;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.ski-live.show {
+  opacity: 1;
+}
 .ski-loadbar {
   position: absolute;
   left: 50%;

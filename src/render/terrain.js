@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { fbm, smoothstep } from '../world/noise.js';
 import { EDGE_HEIGHT } from '../world/world.js';
+import { addSparkle } from './sparkle.js';
 
 const TEX = 2048;
 
@@ -208,6 +209,7 @@ export function buildTerrain(world) {
   const { map, canopy } = paintGround(world);
   const mat = new THREE.MeshStandardMaterial({ map, roughness: 0.92, metalness: 0 });
   addCanopyBlend(mat, canopy);
+  addSparkle(mat);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   mesh.name = 'terrain';

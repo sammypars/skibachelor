@@ -88,8 +88,11 @@ export function makeEnvMap(renderer) {
 
 // Keep the sun's shadow map centred on what the camera is looking at, sized
 // to the view, so close-up shadows are crisp and the overview still has them.
-export function updateSunShadow(sun, focus, cameraDistance) {
-  const half = THREE.MathUtils.clamp(cameraDistance * 0.9, 350, 5600);
+export function updateSunShadow(sun, focus, cameraDistance, minHalf = 350) {
+  const half = THREE.MathUtils.clamp(cameraDistance * 0.9, minHalf, 5600);
+  // Bias with the texel size: crisp contact shadows close up (the skier on
+  // the snow), no acne on the whole-mountain view.
+  sun.shadow.normalBias = half < 300 ? 0.06 + half * 0.0012 : 3;
   const cam = sun.shadow.camera;
   // Snap to shadow texels to avoid shimmering while moving.
   const texel = (half * 2) / sun.shadow.mapSize.x;

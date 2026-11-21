@@ -7,6 +7,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { PARKS } from '../data/mountain.js';
 import { along, beside } from '../world/path.js';
 import { seededRandom } from '../world/noise.js';
+import { addSparkle } from './sparkle.js';
 
 // Woodward colours, from Mt. Bachelor's park photos: black steel, yellow
 // panels with black lettering, white slide surfaces, timber A-frames.
@@ -882,7 +883,7 @@ export function buildParks(world) {
     }
   }
   // Shaped snow: bright groomed corduroy.
-  group.add(snow.mesh(new THREE.MeshStandardMaterial({ color: 0xf6f9fc, map: corduroyTexture(), roughness: 0.82 })));
+  group.add(snow.mesh(addSparkle(new THREE.MeshStandardMaterial({ color: 0xf6f9fc, map: corduroyTexture(), roughness: 0.82 }))));
   const std = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.6, ...extra });
   const addList = (list, mat) => {
     if (list.length) group.add(new THREE.Mesh(mergeGeometries(list.map((g) => (g.index ? g.toNonIndexed() : g))), mat));

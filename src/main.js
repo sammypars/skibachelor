@@ -248,6 +248,7 @@ const ski = createSki({
   grindables: parks.grindables,
   lifts,
   hud: $('#ski-hud'),
+  envMap,
 });
 const skiButton = $('#ski-toggle');
 const startHeading = (run) => {
@@ -577,7 +578,7 @@ function frame() {
   clouds.rotation.y += dt * 0.0015; // slow drift
   const close = ride || drone.active || ski.active;
   const focus = close ? camera.position : controls.target;
-  updateSunShadow(lights.sun, focus, ride ? 400 : ski.active ? 160 : drone.active ? 700 : camera.position.distanceTo(controls.target));
+  updateSunShadow(lights.sun, focus, ride ? 400 : ski.active ? 75 : drone.active ? 700 : camera.position.distanceTo(controls.target), ski.active ? 60 : 350);
   updateLabels();
   hudTimer += dt;
   if (hudTimer > 0.08) {
