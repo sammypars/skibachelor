@@ -2,8 +2,9 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { fbm, noise2, smoothstep, seededRandom } from '../world/noise.js';
 import { EDGE_HEIGHT } from '../world/world.js';
+import { GEO } from '../data/mountain.js';
 
-const MAX_TREES = 120000;
+const MAX_TREES = 155000;
 const MAX_GHOSTS = 9000;
 
 function colorize(geo, fn) {
@@ -69,11 +70,43 @@ function ghostGeometry() {
 }
 
 export function buildForest(world) {
-  const { hf, clear, treeline } = world;
+  const { hf, clear, treeline, canopyAt, openAt } = world;
   const rand = seededRandom(7775);
   const firs = [];
   const outer = []; // trees beyond the heightfield edge (horizon filler)
   const ghosts = [];
+
+  // Puts a tree (or a rime-crusted snow ghost near treeline) at x, z.
+  const plant = (x, z, y, alt, inside) => {
+    if (y > treeline - 230 && y < treeline + 90 && rand() < 0.55 * (1 - alt * 0.6)) {
+      ghosts.push({ x, y, z, s: 0.8 + rand() * 0.7 });
+      return;
+    }
+    // Shorter, stockier trees higher up.
+    const s = (1.25 + rand() * 0.9) * (0.65 + 0.35 * alt);
+    (inside ? firs : outer).push({ x, y, z, s });
+  };
+
+  // 1) Over the ski area, the real tree cover from aerial imagery: every
+  // stand, glade and run edge where it actually is.
+  const { minX, minZ, size } = GEO.trees;
+  const fine = 12;
+  const nf = Math.floor(size / fine);
+  for (let j = 0; j < nf; j++) {
+    for (let i = 0; i < nf; i++) {
+      const x = minX + (i + rand()) * fine;
+      const z = minZ + (j + rand()) * fine;
+      const c = canopyAt(x, z);
+      if (!c || rand() > c.w) continue; // fades into pass 2 at the edge
+      const forest = 1 - openAt(x, z);
+      if (forest < 0.2 || rand() > forest * 1.05) continue;
+      if (world.lakeAt(x, z) < 1.18) continue;
+      const y = hf.heightAt(x, z);
+      plant(x, z, y, 1 - smoothstep(treeline - 260, treeline + 40, y), true);
+    }
+  }
+
+  // 2) Everywhere else, a procedural forest around the cleared runs.
   const spacing = 15;
   const margin = 2600; // keep planting past the heightfield edge
   const x0 = hf.minX - margin;
@@ -87,7 +120,9 @@ export function buildForest(world) {
       const z = z0 + (j + rand()) * spacing;
       const inside = x > hf.minX && x < hf.maxX && z > hf.minZ && z < hf.maxZ;
       if (!inside && rand() < 0.8) continue; // sparser beyond the edge
-      const y = inside ? hf.heightAt(x, z) : EDGE_HEIGHT;
+      const c = inside && canopyAt(x, z);
+      if (c && rand() < c.w) continue; // pass 1 has it
+      const y = inside ? hf.heightAt(x, z) : world.groundAt ? world.groundAt(x, z) : EDGE_HEIGHT;
       if (inside && clear.at(x, z) > 0.35) continue;
       if (world.lakeAt(x, z) < 1.18) continue;
 
@@ -97,15 +132,11 @@ export function buildForest(world) {
       const tl = treeline + 70 * fbm(x / 300, z / 300, 2);
       const alt = 1 - smoothstep(tl - 260, tl, y);
       if (rand() > dens * (0.25 + 0.75 * alt)) continue;
-
-      if (y > tl - 230 && y < tl + 90 && rand() < 0.55) {
-        ghosts.push({ x, y, z, s: 0.8 + rand() * 0.7 });
+      if (alt < 0.05) {
+        if (y < tl + 90 && rand() < 0.55) ghosts.push({ x, y, z, s: 0.8 + rand() * 0.7 });
         continue;
       }
-      if (alt < 0.05) continue;
-      // Shorter, stockier trees higher up.
-      const s = (1.25 + rand() * 0.9) * (0.65 + 0.35 * alt);
-      (inside ? firs : outer).push({ x, y, z, s });
+      plant(x, z, y, alt, inside);
     }
   }
 
@@ -152,5 +183,32 @@ export function buildForest(world) {
     const v = 0.93 + rand() * 0.07;
     c.setRGB(v, v, v);
   });
-  return { group, count: allFirs.length + Math.min(ghosts.length, MAX_GHOSTS) };
+  // Trunks by 10 m cell, for skiers to hit.
+  const trunks = new Map();
+  const cellKey = (x, z) => Math.floor(x / 10) * 100003 + Math.floor(z / 10);
+  for (const t of allFirs) {
+    const k = cellKey(t.x, t.z);
+    if (!trunks.has(k)) trunks.set(k, []);
+    trunks.get(k).push(t);
+  }
+  // The nearest trunk within r meters of (x, z), or null.
+  const treeNear = (x, z, r) => {
+    let best = null;
+    let bd = r;
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const list = trunks.get(cellKey(x + dx * 10, z + dz * 10));
+        if (!list) continue;
+        for (const t of list) {
+          const d = Math.hypot(t.x - x, t.z - z);
+          if (d < bd) {
+            bd = d;
+            best = t;
+          }
+        }
+      }
+    }
+    return best;
+  };
+  return { group, treeNear, count: allFirs.length + Math.min(ghosts.length, MAX_GHOSTS) };
 }

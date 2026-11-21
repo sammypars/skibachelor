@@ -1,348 +1,347 @@
 // Builds the Mt. Bachelor world data (no rendering): terrain heights, lift
-// and lodge positions, roads, parking, and the ski-run network.
+// and lodge positions, roads, parking, lakes and the ski-run network.
+//
+// The ground is real elevation data and everything on it (lifts, runs,
+// buildings, roads, parking, Nordic trails, lakes) is real OpenStreetMap
+// geometry, baked by tools/fetch-geo.mjs. mountain.js adds what the data does
+// not say: lift types and colors, labels, building styles.
 
-import {
-  FT, LIFTS, LODGES, ROADS, PARKING, FEATURES, TREELINE_M, LAKES, NORDIC_TRAILS,
-} from '../data/mountain.js';
-import { pxToWorld, pxToSurface, SUMMIT_M } from './projection.js';
+import { GEO, EXTRA_PARKS, RACE, LIFTS, LODGES, BUILDING_STYLES, TREELINE_M, LAKES, LANDMARKS, TRAIL_MAP_TIES } from '../data/mountain.js';
+import { fitTrailMap } from './projection.js';
 import { Heightfield, Mask } from './heightfield.js';
-import { noise2, fbm, smoothstep, seededRandom, makeNoise2 } from './noise.js';
+import { smoothstep, makeNoise2 } from './noise.js';
 
-export const EXTENT = { minX: -5200, minZ: -3800, size: 10400 };
-export const EDGE_HEIGHT = 1700;
-// Cascade Lakes Highway west of the painted map, toward Sparks Lake.
-const HIGHWAY_WEST = [
-  { x: 1500, z: 5000 }, { x: 2700, z: 5250 }, { x: 3900, z: 5250 }, { x: 5150, z: 5400 },
-];
-const GRID_N = 705; // ~14.8 m cells
+export const EXTENT = { minX: GEO.terrain.minX, minZ: GEO.terrain.minZ, size: GEO.terrain.size };
+export const EDGE_HEIGHT = 1790; // mean real elevation around the map edge
+const GRID_N = GEO.terrain.n;
 const MASK_RES = 1400; // ~7.4 m pixels
 
-const gullyNoise = makeNoise2(77);
+// ---------------------------------------------------------------- geometry helpers
+const P = (a) => ({ x: a[0], z: a[1] });
 
-// Landforms placed off the trail map.
-const features = FEATURES.map((f) => {
-  const p = pxToWorld(f.px[0], f.px[1], f.elevFt * FT);
-  return { ...f, x: p.x, z: p.z };
-});
-
-// The volcano: a concave cone with a small summit crater, radial gullies and
-// rolling noise, plus extra landforms.
-export function baseHeight(x, z) {
-  const r = Math.hypot(x, z);
-  // Profile fitted to the lift/lodge elevations on the trail map. The east
-  // side (left on the map, -x) sits a little lower than the west.
-  let h = 1835 + 928 * Math.exp(-Math.pow(r / 1930, 1.75));
-  h += 0.015 * x * Math.min(1, r / 1500);
-  h -= 0.05 * Math.max(0, r - 3300); // forest floor keeps falling away
-  h += 30 * Math.exp(-((r / 420) ** 2)); // pointier summit cone
-
-  // Summit crater and rim.
-  h -= 20 * Math.exp(-((r / 95) ** 2));
-  h += 6 * Math.exp(-(((r - 150) / 55) ** 2));
-
-  // Radial gullies and ribs running down the cone.
-  const a = Math.atan2(x, z); // seam faces south (behind the mountain)
-  const gw = smoothstep(180, 1300, r) * (1 - smoothstep(3600, 5200, r));
-  const rib = 1 - Math.abs(gullyNoise(a * 4.2, r / 1800 + 0.25 * noise2(x / 900, z / 900)));
-  h += gw * (rib * rib - 0.45) * (14 + 14 * (1 - smoothstep(1200, 2600, r)));
-
-  // Rolling terrain.
-  h += fbm(x / 1400, z / 1400, 3) * 22 * smoothstep(400, 1800, r);
-  h += fbm(x / 260, z / 260, 3) * 4.5;
-
-  for (const f of features) {
-    const d = Math.hypot(x - f.x, z - f.z);
-    const q = d / f.radius;
-    h += f.height * Math.exp(-q * q * 2.2);
-    if (f.crater) h -= f.height * 0.35 * Math.exp(-((d / (f.radius * 0.28)) ** 2));
+function centroid(pts) {
+  let x = 0;
+  let z = 0;
+  const ring = pts.length > 1 && pts[0].x === pts.at(-1).x && pts[0].z === pts.at(-1).z ? pts.slice(0, -1) : pts;
+  for (const p of ring) {
+    x += p.x;
+    z += p.z;
   }
-  return h;
+  return { x: x / ring.length, z: z / ring.length };
 }
 
-function lerp(a, b, t) {
-  return a + (b - a) * t;
-}
-
-function catmull(p0, p1, p2, p3, t) {
-  const t2 = t * t;
-  const t3 = t2 * t;
-  const f = (a, b, c, d) =>
-    0.5 * (2 * b + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (-a + 3 * b - 3 * c + d) * t3);
-  return { x: f(p0.x, p1.x, p2.x, p3.x), z: f(p0.z, p1.z, p2.z, p3.z) };
-}
-
-function smoothPath(ctrl, step = 14) {
-  const pts = [];
-  const ext = [ctrl[0], ...ctrl, ctrl[ctrl.length - 1]];
-  for (let i = 1; i < ext.length - 2; i++) {
-    const a = ext[i];
-    const b = ext[i + 1];
-    const segs = Math.max(2, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / step));
-    for (let s = 0; s < segs; s++) pts.push(catmull(ext[i - 1], a, b, ext[i + 2], s / segs));
-  }
-  pts.push(ctrl[ctrl.length - 1]);
-  return pts;
-}
-
-function difficultyFor(hf, pts) {
-  let maxSlope = 0;
-  let sum = 0;
-  for (const p of pts) {
-    const s = hf.gradient(p.x, p.z, 20).slope;
-    sum += s;
-    maxSlope = Math.max(maxSlope, s);
-  }
-  const avg = sum / pts.length;
-  if (maxSlope > 0.8 || avg > 0.46) return 'black';
-  if (avg > 0.24) return 'blue';
-  return 'green';
-}
-
-// Runs fan out from a lift's top terminal and gather back to its bottom.
-// Some branch off earlier runs part-way down, so the network looks like the
-// painted trail map rather than a set of spokes.
-function runsForLift(hf, lift, rand) {
-  const { bottom: B, top: T } = lift;
-  const len = Math.hypot(T.x - B.x, T.z - B.z);
-  const dx = (B.x - T.x) / len;
-  const dz = (B.z - T.z) / len;
-  const nx = -dz;
-  const nz = dx;
-  const count = Math.max(3, Math.min(11, Math.round(len / 185)));
-  const fan = len * (0.2 + rand() * 0.08);
-  const at = (t, spread) => ({
-    x: T.x + dx * len * t + nx * spread,
-    z: T.z + dz * len * t + nz * spread,
-  });
-  const progress = (p) => ((p.x - T.x) * dx + (p.z - T.z) * dz) / len;
-  const runs = [];
-  const gap = (2 * fan) / count; // distance between neighbouring run centres
-  const jitter = gap * 0.22;
-  const wiggleAmp = Math.min(40, gap * 0.26);
-  for (let k = 0; k < count; k++) {
-    // Runs keep their left-to-right order all the way down, so they sit side
-    // by side with strips of trees between them instead of crossing.
-    const spread = (-1 + (2 * (k + 0.5)) / count) * fan + (rand() - 0.5) * jitter;
-    let start = at(0.015, (k - (count - 1) / 2) * 7);
-    if (k >= 1 && rand() < 0.45) {
-      // Branch off the neighbouring run a little way down.
-      const parent = runs[k - 1].pts;
-      start = parent[Math.floor(parent.length * (0.12 + rand() * 0.28))];
+// Minimum-area bounding rectangle of a footprint: center, long side w,
+// short side d, and the yaw that turns local +x onto the long side.
+function orientedBox(pts) {
+  const c = centroid(pts);
+  let best = null;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = Math.atan2(pts[i + 1].z - pts[i].z, pts[i + 1].x - pts[i].x);
+    const ca = Math.cos(a);
+    const sa = Math.sin(a);
+    let u0 = Infinity;
+    let u1 = -Infinity;
+    let v0 = Infinity;
+    let v1 = -Infinity;
+    for (const p of pts) {
+      const u = (p.x - c.x) * ca + (p.z - c.z) * sa;
+      const v = -(p.x - c.x) * sa + (p.z - c.z) * ca;
+      u0 = Math.min(u0, u);
+      u1 = Math.max(u1, u);
+      v0 = Math.min(v0, v);
+      v1 = Math.max(v1, v);
     }
-    const t0 = Math.max(0.015, progress(start));
-    const span = 1 - t0;
-    const ctrl = [
-      start,
-      at(t0 + span * 0.3, spread * 0.8 + (rand() - 0.5) * jitter),
-      at(t0 + span * 0.62, spread + (rand() - 0.5) * jitter),
-      at(0.92, spread * 0.55),
-      at(1.0, Math.sign(spread || 1) * 30 + spread * 0.2),
-    ];
-    let pts = smoothPath(ctrl);
-    const seed = rand() * 100;
-    const total = pts.length;
-    pts = pts.map((p, i) => {
-      const t = i / (total - 1);
-      const w = Math.sin(Math.PI * t) * wiggleAmp * noise2(seed + (t * len * span) / 230, seed * 0.37);
-      return { x: p.x + nx * w, z: p.z + nz * w };
+    const area = (u1 - u0) * (v1 - v0);
+    if (!best || area < best.area) best = { area, a, u0, u1, v0, v1 };
+  }
+  let { a, u0, u1, v0, v1 } = best;
+  // Center of the box (not the vertex centroid).
+  const cu = (u0 + u1) / 2;
+  const cv = (v0 + v1) / 2;
+  const x = c.x + cu * Math.cos(a) - cv * Math.sin(a);
+  const z = c.z + cu * Math.sin(a) + cv * Math.cos(a);
+  let w = u1 - u0;
+  let d = v1 - v0;
+  if (d > w) {
+    [w, d] = [d, w];
+    a += Math.PI / 2;
+  }
+  // three.js yaw: rotation.y = yaw maps local +x to (cos yaw, -sin yaw).
+  return { x, z, w, d, yaw: -a };
+}
+
+// Resample a polyline so no two points are more than `step` apart.
+function densify(pts, step = 10) {
+  const out = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / step));
+    for (let k = 1; k <= n; k++) out.push({ x: a.x + ((b.x - a.x) * k) / n, z: a.z + ((b.z - a.z) * k) / n });
+  }
+  return out;
+}
+
+function smoothPolyline(pts, passes = 2) {
+  let cur = pts;
+  for (let p = 0; p < passes; p++) {
+    cur = cur.map((q, i) => {
+      if (i === 0 || i === cur.length - 1) return q;
+      return { x: (cur[i - 1].x + 2 * q.x + cur[i + 1].x) / 4, z: (cur[i - 1].z + 2 * q.z + cur[i + 1].z) / 4 };
     });
-    const width = Math.min(gap * 0.62, (lift.type === 'express' ? 28 : 24) + rand() * 22);
-    runs.push({ lift: lift.id, pts, width: Math.max(20, width), difficulty: difficultyFor(hf, pts) });
   }
-  return runs;
+  return cur;
 }
 
-// A cat track that holds one elevation around the mountain between two
-// bearings (radians, atan2(x, z): 0 = north, negative = east).
-function contourTrack(hf, elevM, a0, a1) {
-  const pts = [];
-  const steps = Math.ceil(Math.abs(a1 - a0) / 0.012);
-  for (let i = 0; i <= steps; i++) {
-    const a = a0 + ((a1 - a0) * i) / steps;
-    const sx = Math.sin(a);
-    const sz = Math.cos(a);
-    let lo = 40;
-    let hi = 5000;
-    for (let k = 0; k < 28; k++) {
-      const mid = (lo + hi) / 2;
-      if (hf.heightAt(sx * mid, sz * mid) > elevM) lo = mid;
-      else hi = mid;
+// ---------------------------------------------------------------- lakes
+// A lake from a shoreline polygon. q(x, z) < 1 inside the water, rising
+// smoothly outside (distance from the center relative to the shoreline in
+// that direction), which the basin carving and tree planting use.
+function lakeFromOutline(name, outline) {
+  const c = centroid(outline);
+  const BINS = 180;
+  const radius = new Float32Array(BINS);
+  for (let k = 0; k < BINS; k++) {
+    const ang = (k / BINS) * Math.PI * 2;
+    const dx = Math.cos(ang);
+    const dz = Math.sin(ang);
+    let r = 0;
+    for (let i = 0; i < outline.length - 1; i++) {
+      // Ray / segment intersection.
+      const ax = outline[i].x - c.x;
+      const az = outline[i].z - c.z;
+      const bx = outline[i + 1].x - c.x;
+      const bz = outline[i + 1].z - c.z;
+      const ex = bx - ax;
+      const ez = bz - az;
+      const den = dx * ez - dz * ex;
+      if (Math.abs(den) < 1e-9) continue;
+      const t = (ax * ez - az * ex) / den;
+      const s = (ax * dz - az * dx) / den;
+      if (t > 0 && s >= 0 && s <= 1) r = Math.max(r, t);
     }
-    pts.push({ x: sx * lo, z: sz * lo });
+    radius[k] = r;
   }
-  // Smooth the wobble from gullies.
-  return pts.map((p, i) => {
-    let x = 0;
-    let z = 0;
-    let c = 0;
-    for (let k = Math.max(0, i - 6); k <= Math.min(pts.length - 1, i + 6); k++) {
-      x += pts[k].x;
-      z += pts[k].z;
-      c++;
-    }
-    return { x: x / c, z: z / c };
-  });
+  const R = (ang) => {
+    const f = ((ang / (Math.PI * 2)) * BINS + BINS) % BINS;
+    const i = Math.floor(f);
+    const t = f - i;
+    return radius[i] * (1 - t) + radius[(i + 1) % BINS] * t || 1;
+  };
+  const q = (x, z) => Math.hypot(x - c.x, z - c.z) / R(Math.atan2(z - c.z, x - c.x));
+  const reach = Math.max(...radius) * 1.3;
+  return { name, x: c.x, z: c.z, q, outline, reach };
 }
 
-// Irregular lake outline around an ellipse. q(x, z) < 1 inside the water.
-function makeLake(L, i) {
+// Irregular ellipse, for lakes OpenStreetMap does not give a full shoreline for.
+function lakeFromEllipse(L, i) {
   const noise = makeNoise2(500 + i);
   const yaw = (L.yawDeg * Math.PI) / 180;
   const c = Math.cos(yaw);
   const s = Math.sin(yaw);
   const a = L.size[0] / 2;
   const b = L.size[1] / 2;
-  const k = (ang) =>
-    1 + 0.16 * noise(Math.cos(ang) * 1.3, Math.sin(ang) * 1.3) + 0.06 * noise(Math.cos(ang) * 4, Math.sin(ang) * 4);
-  const q = (x, z) => {
-    const dx = x - L.x;
-    const dz = z - L.z;
-    const lx = dx * c - dz * s;
-    const lz = dx * s + dz * c;
-    return Math.hypot(lx / a, lz / b) / k(Math.atan2(lz / b, lx / a));
-  };
   const outline = [];
-  for (let n = 0; n < 96; n++) {
+  for (let n = 0; n <= 96; n++) {
     const ang = (n / 96) * Math.PI * 2;
-    const lx = a * k(ang) * Math.cos(ang);
-    const lz = b * k(ang) * Math.sin(ang);
+    const k = 1 + 0.16 * noise(Math.cos(ang) * 1.3, Math.sin(ang) * 1.3) + 0.06 * noise(Math.cos(ang) * 4, Math.sin(ang) * 4);
+    const lx = a * k * Math.cos(ang);
+    const lz = b * k * Math.sin(ang);
     outline.push({ x: L.x + lx * c + lz * s, z: L.z - lx * s + lz * c });
   }
-  return { ...L, q, outline, reach: Math.max(a, b) * 1.3 };
+  return { ...lakeFromOutline(L.name, outline), elevFt: L.elevFt };
 }
 
-export function buildWorld() {
+// ---------------------------------------------------------------- runs
+const CATWALK = /\b(road|getback|crossover|connection|catchline|shuttle|alley|way|i-5|zoom|leeway|runway)\b/i;
+const DIFFICULTY = { novice: 'green', easy: 'green', intermediate: 'blue', advanced: 'black', expert: 'double', freeride: 'double' };
+// Typical cut widths (m). Mt. Bachelor's runs are broad; groomers below
+// Pine Marten are often 50-80 m across.
+const RUN_WIDTH = { green: 62, blue: 56, black: 44, double: 36 };
+
+function runFromOsm(r, i) {
+  const difficulty = DIFFICULTY[r.difficulty] || 'blue';
+  const catwalk = CATWALK.test(r.name || '');
+  const kind = r.type === 'snow_park' ? 'park' : catwalk ? 'catwalk' : 'run';
+  const width = kind === 'catwalk' ? 18 : kind === 'park' ? 50 : RUN_WIDTH[difficulty] * (0.8 + 0.4 * ((i * 0.618) % 1));
+  return { name: r.name, kind, difficulty, width, pts: smoothPolyline(densify(r.pts.map(P), 8)) };
+}
+
+// ---------------------------------------------------------------- build
+export function buildWorld(geo) {
+  const { osm } = geo;
   const hf = new Heightfield({ ...EXTENT, n: GRID_N });
-  hf.fill(baseHeight);
-  // Ease the outer border down to a flat forest floor so the land beyond the
-  // map edge meets it cleanly.
+  hf.h.set(geo.heights);
+  // The real land around the map, and a height lookup that works anywhere.
+  const region = geo.region || {};
+  const regionAt = (x, z) => sampleRegion(region.mid, x, z) ?? sampleRegion(region.far, x, z) ?? EDGE_HEIGHT;
+  // Ease the outer border onto the surrounding land (the coarser regional
+  // grid, or a flat forest floor without it) so the two meet without a seam.
   {
     const { n, cell, h } = hf;
+    const blend = region.mid ? 300 : 700;
     for (let j = 0; j < n; j++) {
       for (let i = 0; i < n; i++) {
         const edgeDist = Math.min(i, j, n - 1 - i, n - 1 - j) * cell;
-        const w = 1 - smoothstep(0, 900, edgeDist);
-        h[j * n + i] += (EDGE_HEIGHT - h[j * n + i]) * w;
+        if (edgeDist > blend) continue;
+        const w = 1 - smoothstep(0, blend, edgeDist);
+        const target = region.mid ? regionAt(hf.minX + i * cell, hf.minZ + j * cell) : EDGE_HEIGHT;
+        h[j * n + i] += (target - h[j * n + i]) * w;
       }
     }
   }
+  const groundAt = (x, z) =>
+    x > hf.minX && x < hf.maxX && z > hf.minZ && z < hf.maxZ ? hf.heightAt(x, z) : regionAt(x, z);
+  const H = (x, z) => hf.heightAt(x, z);
 
-  // --- Place lifts and lodges from the trail map at their real elevations.
+  // --- Lifts, by their OpenStreetMap names. Bottom is the first point.
   const lifts = LIFTS.map((l) => {
-    const b = pxToWorld(l.bottomPx[0], l.bottomPx[1], l.bottomFt * FT);
-    const t = pxToWorld(l.topPx[0], l.topPx[1], l.topFt * FT);
-    return {
-      ...l,
-      bottom: { x: b.x, z: b.z, y: l.bottomFt * FT },
-      top: { x: t.x, z: t.z, y: l.topFt * FT },
-    };
+    const way = osm.lifts.find((w) => w.name === l.osm);
+    if (!way) throw new Error(`No lift named "${l.osm}" in osm.json`);
+    const b = P(way.pts[0]);
+    const t = P(way.pts.at(-1));
+    return { ...l, bottom: { ...b, y: H(b.x, b.z) }, top: { ...t, y: H(t.x, t.z) } };
   });
-  const lodges = LODGES.map((l) => {
-    const p = pxToWorld(l.px[0], l.px[1], l.elevFt * FT);
-    const yaw = (l.yawDeg * Math.PI) / 180;
-    const c = Math.cos(yaw);
-    const sn = Math.sin(yaw);
-    const buildings = (l.buildings || []).map((b) => ({
-      ...b,
-      wx: p.x + b.x * c + b.z * sn,
-      wz: p.z - b.x * sn + b.z * c,
-      wyaw: yaw + ((b.yawDeg || 0) * Math.PI) / 180,
-    }));
-    return { ...l, x: p.x, z: p.z, y: l.elevFt * FT, yaw, buildings };
-  });
+  const nearLiftEnd = (p, r) =>
+    lifts.some((l) => Math.hypot(l.bottom.x - p.x, l.bottom.z - p.z) < r || Math.hypot(l.top.x - p.x, l.top.z - p.z) < r);
 
-  // --- Bend the terrain so it passes through every known elevation.
-  const controls = [
-    { x: 0, z: 0, y: SUMMIT_M },
-    ...lifts.flatMap((l) => [l.bottom, l.top]),
-    ...lodges,
-  ];
-  for (let iter = 0; iter < 8; iter++) {
-    for (const c of controls) {
-      const r = c.y - hf.heightAt(c.x, c.z);
-      if (Math.abs(r) > 0.2) hf.addGaussian(c.x, c.z, r * 0.7, 560);
+  // --- Buildings from real footprints. Lift stations are drawn by the lift
+  // renderer, so skip footprints sitting on a lift terminal.
+  const buildings = [];
+  for (const fp of osm.buildings) {
+    const pts = fp.pts.map(P);
+    const box = orientedBox(pts);
+    if (nearLiftEnd(box, 22) && box.w < 40) continue;
+    const style = BUILDING_STYLES[fp.name] || (box.w > 20 ? { style: 'shed', h: 7 } : { style: 'hut', h: 4.5 });
+    // Floor level: the downhill corner, so the building digs into the slope
+    // instead of floating.
+    const g = hf.gradient(box.x, box.z, 15);
+    const ys = pts.map((p) => H(p.x, p.z));
+    const y = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const yaw = box.yaw;
+    // Local +z after rotation is (sin yaw, cos yaw); face decks downhill.
+    const down = -(Math.sin(yaw) * g.dx + Math.cos(yaw) * g.dz);
+    const side = down >= 0 ? 1 : -1;
+    const parts = style.parts || [{ style: style.style, dw: 1, dd: 1, dx: 0, dz: 0, h: style.h, deck: style.deck }];
+    for (const part of parts) {
+      const lx = (part.dx || 0) * box.w;
+      const lz = (part.dz || 0) * box.d * side;
+      buildings.push({
+        name: fp.name,
+        style: part.style,
+        w: box.w * part.dw,
+        d: box.d * part.dd,
+        h: part.h,
+        deck: part.deck ? side : 0,
+        // Local +x is (cos yaw, -sin yaw), local +z is (sin yaw, cos yaw).
+        wx: box.x + lx * Math.cos(yaw) + lz * Math.sin(yaw),
+        wz: box.z - lx * Math.sin(yaw) + lz * Math.cos(yaw),
+        wyaw: yaw,
+        y,
+        footprint: { x: box.x, z: box.z, w: box.w, d: box.d, yaw },
+      });
     }
   }
 
-  // --- Roads and parking (unprojected onto the corrected surface).
-  const heightFn = (x, z) => hf.heightAt(x, z);
-  const inside = (p, m) =>
-    p.x > hf.minX + m && p.x < hf.maxX - m && p.z > hf.minZ + m && p.z < hf.maxZ - m;
-  const roads = ROADS.map((road) => {
-    const ctrl = road.px.map(([u, v]) => pxToSurface(u, v, heightFn));
-    if (road.id === 'cascade-lakes-hwy') {
-      // Beyond the painted map: east toward Bend, and west past Sparks Lake.
-      const [a, b] = ctrl;
-      const len = Math.hypot(a.x - b.x, a.z - b.z);
-      const dir = { x: (a.x - b.x) / len, z: (a.z - b.z) / len };
-      // Run on a little, then swing north-east toward Bend.
-      const east = [
-        { x: a.x + dir.x * 500, z: a.z + dir.z * 500 },
-        { x: a.x + dir.x * 1000 - 250, z: a.z + dir.z * 1000 + 350 },
-        { x: a.x + dir.x * 1000 - 1400, z: a.z + dir.z * 1000 + 1100 },
-        { x: a.x + dir.x * 1000 - 2800, z: a.z + dir.z * 1000 + 1900 },
-      ];
-      for (const p of east) if (inside(p, 60)) ctrl.unshift(p);
-      for (const p of HIGHWAY_WEST) if (inside(p, 40)) ctrl.push({ ...p });
+  // --- Lodges: named anchors for labels and camera views.
+  const lodges = LODGES.map((l) => {
+    let p = l.at ? { x: l.at[0], z: l.at[1] } : null;
+    let size = [10, 10, 6];
+    if (l.osm) {
+      const fp = osm.buildings.find((b) => b.name === l.osm);
+      if (!fp) throw new Error(`No building named "${l.osm}" in osm.json`);
+      const box = orientedBox(fp.pts.map(P));
+      p = box;
+      size = [box.w, box.d, (BUILDING_STYLES[l.osm] || {}).h || 10];
     }
-    const pts = smoothPath(ctrl, 10).map((p) => ({ x: p.x, z: p.z, y: hf.heightAt(p.x, p.z) }));
-    // Smooth the road's grade so it does not follow every bump.
-    const smoothY = pts.map((_, i) => {
+    return { ...l, x: p.x, z: p.z, y: H(p.x, p.z), size };
+  });
+
+  // --- Roads and parking that are plowed in winter: the highway up to West
+  // Village, and the access roads and lots around the base areas.
+  const bases = lodges.filter((l) => l.base);
+  const nearBase = (p, r) => bases.some((b) => Math.hypot(b.x - p.x, b.z - p.z) < r);
+  const roads = [];
+  for (const r of osm.roads) {
+    let pts = r.pts.map(P);
+    if (r.name === 'Cascade Lakes Highway') {
+      // Closed past West Village all winter.
+      pts = pts.filter((p) => p.x < -650);
+    } else if (!pts.every((p) => nearBase(p, 1300) && H(p.x, p.z) < 2000)) continue;
+    if (pts.length < 2) continue;
+    const width = r.highway === 'secondary' ? 11 : r.highway === 'service' ? 7 : 9;
+    const line = densify(pts, 10).map((p) => ({ ...p, y: H(p.x, p.z) }));
+    // Smooth the grade so the road does not follow every bump.
+    const ys = line.map((_, i) => {
       let s = 0;
       let c = 0;
-      for (let k = Math.max(0, i - 14); k <= Math.min(pts.length - 1, i + 14); k++) {
-        s += pts[k].y;
+      for (let k = Math.max(0, i - 6); k <= Math.min(line.length - 1, i + 6); k++) {
+        s += line[k].y;
         c++;
       }
       return s / c;
     });
-    pts.forEach((p, i) => (p.y = smoothY[i]));
-    return { ...road, pts };
-  });
+    line.forEach((p, i) => (p.y = ys[i]));
+    roads.push({ id: r.name || r.highway, width, pts: line });
+  }
   for (const road of roads) {
-    for (const p of road.pts) hf.flattenDisc(p.x, p.z, road.width / 2 + 3, 22, p.y - 0.4);
+    for (const p of road.pts) hf.flattenDisc(p.x, p.z, road.width / 2 + 2, 14, p.y - 0.3);
   }
 
-  const parking = PARKING.map((lot) => {
-    const p = pxToSurface(lot.px[0], lot.px[1], heightFn);
-    return { ...lot, x: p.x, z: p.z, y: p.y, yaw: (lot.yawDeg * Math.PI) / 180 };
+  const parking = [];
+  for (const lot of osm.parking) {
+    const pts = lot.pts.map(P);
+    const box = orientedBox(pts);
+    if (!nearBase(box, 1300)) continue;
+    const y = pts.reduce((s, p) => s + H(p.x, p.z), 0) / pts.length;
+    parking.push({ id: lot.name || 'lot', x: box.x, z: box.z, y, yaw: box.yaw, size: [box.w, box.d], outline: pts });
+  }
+  for (const lot of parking) hf.flattenRect(lot.x, lot.z, lot.size[0], lot.size[1], lot.yaw, 25, lot.y);
+
+  // --- Building pads and lift terminal pads (each at its own real height,
+  // so they sit in the slope rather than on a plinth).
+  for (const b of buildings) {
+    const f = b.footprint;
+    hf.flattenRect(f.x, f.z, f.w + 8, f.d + 8, f.yaw, 14, b.y);
+  }
+  for (const l of lifts) {
+    hf.flattenDisc(l.bottom.x, l.bottom.z, 12, 16, l.bottom.y);
+    hf.flattenDisc(l.top.x, l.top.z, 10, 14, l.top.y);
+  }
+  for (const l of lifts) {
+    l.bottom.y = H(l.bottom.x, l.bottom.z);
+    l.top.y = H(l.top.x, l.top.z);
+  }
+  for (const l of lodges) l.y = H(l.x, l.z);
+
+  // --- Lakes: real shorelines where OpenStreetMap has a closed one, else
+  // the approximate outlines in mountain.js.
+  const inside = (p, m) => p.x > hf.minX + m && p.x < hf.maxX - m && p.z > hf.minZ + m && p.z < hf.maxZ - m;
+  const lakes = [];
+  for (const w of osm.water) {
+    const pts = w.pts.map(P);
+    const closed = pts.length > 3 && pts[0].x === pts.at(-1).x && pts[0].z === pts.at(-1).z;
+    if (closed && pts.every((p) => inside(p, 60))) lakes.push(lakeFromOutline(w.name, pts));
+  }
+  LAKES.forEach((L, i) => {
+    if (!lakes.some((k) => k.name === L.name)) lakes.push(lakeFromEllipse(L, i));
   });
-  for (const lot of parking) {
-    hf.flattenRect(lot.x, lot.z, lot.size[0], lot.size[1], lot.yaw, 30, lot.y);
-  }
-
-  // --- Building pads and lift terminal pads.
-  for (const l of lodges) {
-    hf.flattenDisc(l.x, l.z, 18, 25, l.y);
-    for (const b of l.buildings) hf.flattenRect(b.wx, b.wz, b.w + 14, b.d + 14, b.wyaw, 22, l.y);
-  }
-  for (const l of lifts) {
-    hf.flattenDisc(l.bottom.x, l.bottom.z, 14, 18, l.bottom.y);
-    hf.flattenDisc(l.top.x, l.top.z, 12, 16, l.top.y);
-  }
-  // Re-sample elevations after flattening (roads may have nudged them).
-  for (const l of lifts) {
-    l.bottom.y = hf.heightAt(l.bottom.x, l.bottom.z);
-    l.top.y = hf.heightAt(l.top.x, l.top.z);
-  }
-  for (const l of lodges) l.y = hf.heightAt(l.x, l.z);
-
-  // --- Lakes. Ones inside the heightfield get a basin carved for them.
-  const lakes = LAKES.map((L, i) => makeLake(L, i));
   for (const lake of lakes) {
-    if (!inside(lake, 0) || lake.x + lake.reach > hf.maxX || lake.z + lake.reach > hf.maxZ) {
-      lake.level = EDGE_HEIGHT + 0.4;
+    if (!inside(lake, 0) || lake.x + lake.reach > hf.maxX || lake.z + lake.reach > hf.maxZ ||
+        lake.x - lake.reach < hf.minX || lake.z - lake.reach < hf.minZ) {
+      lake.level = groundAt(lake.x, lake.z) + 0.4;
+      lake.offMap = true;
       continue;
     }
     let level = Infinity;
-    for (const p of lake.outline) level = Math.min(level, hf.heightAt(p.x, p.z));
-    lake.level = level - 1;
+    for (const p of lake.outline) level = Math.min(level, H(p.x, p.z));
+    lake.level = level - 0.6;
     hf.forEachNear(lake.x, lake.z, lake.reach * 1.4, (k, cx, cz) => {
       const q = lake.q(cx, cz);
-      if (q < 1) hf.h[k] = lake.level - 4 * Math.min(1, (1 - q) * 4);
-      else if (q < 1.4) {
-        const t = smoothstep(1, 1.4, q);
-        hf.h[k] = (lake.level + 0.6) * (1 - t) + hf.h[k] * t;
+      if (q < 1) hf.h[k] = Math.min(hf.h[k], lake.level - 3 * Math.min(1, (1 - q) * 4));
+      else if (q < 1.25) {
+        const t = smoothstep(1, 1.25, q);
+        hf.h[k] = Math.min(hf.h[k], (lake.level + 0.5) * (1 - t) + hf.h[k] * t);
       }
     });
   }
@@ -355,92 +354,155 @@ export function buildWorld() {
     return best; // < 1 means in the water
   };
 
-  // --- Nordic Center trail loops.
-  const nordicLodge = lodges.find((l) => l.id === 'nordic');
-  const nordicTrails = NORDIC_TRAILS.map((t, i) => {
-    const noise = makeNoise2(300 + i);
-    const cx = nordicLodge.x + t.dx;
-    const cz = nordicLodge.z + t.dz;
-    const pts = [];
-    const steps = Math.ceil((2 * Math.PI * Math.max(t.rx, t.rz)) / 12);
-    for (let k = 0; k <= steps; k++) {
-      const a = (k / steps) * Math.PI * 2;
-      const w = 1 + (t.wobble / Math.max(t.rx, t.rz)) * noise(Math.cos(a) * 1.6, Math.sin(a) * 1.6);
-      pts.push({ x: cx + Math.cos(a) * t.rx * w, z: cz + Math.sin(a) * t.rz * w });
+  // --- Runs, terrain parks and Nordic trails.
+  const runs = [];
+  const areas = [];
+  const nordicTrails = [];
+  osm.runs.forEach((r, i) => {
+    if (r.type === 'nordic') {
+      nordicTrails.push({ name: r.name, width: 6, pts: densify(r.pts.map(P), 8), link: [] });
+    } else if (r.type === 'downhill' || r.type === 'snow_park') {
+      if (r.area) areas.push({ name: r.name, difficulty: DIFFICULTY[r.difficulty] || null, gladed: r.grooming === 'backcountry', pts: r.pts.map(P) });
+      else runs.push(runFromOsm(r, i));
     }
-    // Connector from the lodge to the nearest point on the loop.
-    let near = pts[0];
-    for (const p of pts) {
-      if (Math.hypot(p.x - nordicLodge.x, p.z - nordicLodge.z) < Math.hypot(near.x - nordicLodge.x, near.z - nordicLodge.z)) near = p;
-    }
-    const link = smoothPath([{ x: nordicLodge.x, z: nordicLodge.z }, near], 10);
-    return { ...t, pts, link };
   });
+  // Woodward parks that OpenStreetMap doesn't have, laid beside their lift
+  // line on whichever side the real tree cover is more open.
+  const canopyEarly = makeCanopy(geo.trees);
+  for (const zone of EXTRA_PARKS) {
+    const l = lifts.find((x) => x.id === zone.lift);
+    if (!l) continue;
+    const ux = l.bottom.x - l.top.x;
+    const uz = l.bottom.z - l.top.z;
+    const len = Math.hypot(ux, uz);
+    const line = (off) => {
+      const pts = [];
+      for (let t = zone.from; t <= zone.to + 1e-6; t += 8 / len) {
+        pts.push({ x: l.top.x + ux * t - (uz / len) * off, z: l.top.z + uz * t + (ux / len) * off });
+      }
+      return pts;
+    };
+    const cover = (pts) => pts.reduce((a, p) => a + (canopyEarly(p.x, p.z)?.v ?? 0.5), 0);
+    const a = line(zone.offset);
+    const b = line(-zone.offset);
+    runs.push({ name: zone.name, kind: 'park', difficulty: 'easy', width: zone.width, pts: cover(a) <= cover(b) ? a : b });
+  }
 
-  // --- Ski runs.
-  const rand = seededRandom(1958);
-  const runs = lifts.flatMap((l) => (l.id === 'little-pine' ? [] : runsForLift(hf, l, rand)));
-  // Cat tracks: one around the mountain at Pine Marten Lodge level, one
-  // linking Sunrise and West Village along the bottom.
-  const bearing = (p) => Math.atan2(p.x, p.z);
-  const cc = lifts.find((l) => l.id === 'cloudchaser');
-  const nw = lifts.find((l) => l.id === 'northwest');
-  const pmLodge = lodges.find((l) => l.id === 'pine-marten-lodge');
-  const srLodge = lodges.find((l) => l.id === 'sunrise-lodge');
-  const wvLodge = lodges.find((l) => l.id === 'west-village');
-  runs.push({
-    lift: null,
-    kind: 'catwalk',
-    pts: contourTrack(hf, pmLodge.y - 8, bearing(cc.top) - 0.05, bearing(nw.top) + 0.08),
-    width: 16,
-    difficulty: 'green',
-  });
-  runs.push({
-    lift: null,
-    kind: 'catwalk',
-    pts: contourTrack(hf, (srLodge.y + wvLodge.y) / 2 + 25, bearing(srLodge) + 0.03, bearing(wvLodge) - 0.03),
-    width: 15,
-    difficulty: 'green',
-  });
-  // Little Pine: one wide, gentle beginner slope.
-  const lp = lifts.find((l) => l.id === 'little-pine');
-  runs.push({
-    lift: lp.id,
-    pts: smoothPath([lp.top, { x: lerp(lp.top.x, lp.bottom.x, 0.5) + 25, z: lerp(lp.top.z, lp.bottom.z, 0.5) }, lp.bottom]),
-    width: 95,
-    difficulty: 'green',
-  });
+  // Every run runs top to bottom (OpenStreetMap ways are usually drawn that
+  // way, not always), and knows its length.
+  for (const r of runs) {
+    if (H(r.pts[0].x, r.pts[0].z) < H(r.pts.at(-1).x, r.pts.at(-1).z)) r.pts.reverse();
+    let len = 0;
+    r.cum = r.pts.map((p, i) => (len += i ? Math.hypot(p.x - r.pts[i - 1].x, p.z - r.pts[i - 1].z) : 0));
+    r.length = len;
+  }
 
-  // --- Clearing mask: where the forest is cut (runs, lift lines, base areas).
-  const clear = new Mask(EXTENT, MASK_RES);
-  for (const r of runs) clear.polyline(r.pts, r.width / 2, 10);
+  // --- Clearing masks. `cut` is everything built (lift lines, buildings,
+  // roads, lots, lakes, park corridors); `clear` adds the runs, for places
+  // without real tree cover.
+  const cut = new Mask(EXTENT, MASK_RES);
   for (const l of lifts) {
-    clear.segment(l.bottom.x, l.bottom.z, l.top.x, l.top.z, 13, 6);
-    clear.disc(l.bottom.x, l.bottom.z, 55, 25);
-    clear.disc(l.top.x, l.top.z, 45, 20);
+    cut.segment(l.bottom.x, l.bottom.z, l.top.x, l.top.z, l.type === 'express' ? 12 : 9, 5);
+    cut.disc(l.bottom.x, l.bottom.z, 40, 20);
+    cut.disc(l.top.x, l.top.z, 32, 16);
   }
-  for (const l of lodges) {
-    clear.disc(l.x, l.z, 40, 30);
-    for (const b of l.buildings) clear.disc(b.wx, b.wz, Math.max(b.w, b.d) * 0.75 + 12, 20);
+  for (const b of buildings) {
+    const f = b.footprint;
+    cut.disc(f.x, f.z, Math.max(f.w, f.d) * 0.6 + 14, 16);
   }
-  for (const t of nordicTrails) {
-    clear.polyline(t.pts, t.width / 2 + 3, 5);
-    clear.polyline(t.link, t.width / 2 + 3, 5);
-  }
-  for (const lake of lakes) {
-    if (lake.level > EDGE_HEIGHT + 1) clear.polyline([...lake.outline, lake.outline[0]], 25, 15);
-  }
-  for (const road of roads) clear.polyline(road.pts, road.width / 2 + 9, 6);
-  for (const lot of parking) clear.disc(lot.x, lot.z, Math.max(...lot.size) * 0.62, 25);
+  for (const l of lodges) if (l.base) cut.disc(l.x, l.z, 90, 40);
+  for (const lake of lakes) if (!lake.offMap) cut.polyline([...lake.outline, lake.outline[0]], 20, 15);
+  for (const road of roads) cut.polyline(road.pts, road.width / 2 + 8, 6);
+  for (const lot of parking) cut.polygon(lot.outline, 12);
+  // Park features need their lanes clear of trees.
+  for (const r of runs) if (r.kind === 'park') cut.polyline(r.pts, 22, 6);
+  // The race corridor on Cliffhanger is cleared out to its B-net.
+  const raceRun = runs.filter((r) => r.name === RACE.run).sort((x, y) => y.length - x.length)[0];
+  if (raceRun) cut.polyline(raceRun.pts, RACE.fence + 4, 8);
 
-  // Base-area beginner meadows.
-  const wv = lodges.find((l) => l.id === 'west-village');
-  const sr = lodges.find((l) => l.id === 'sunrise-lodge');
-  clear.disc(wv.x, wv.z - 110, 170, 60);
-  clear.disc(sr.x + 20, sr.z - 90, 120, 50);
+  const clear = new Mask(EXTENT, MASK_RES);
+  clear.data.set(cut.data);
+  for (const r of runs) clear.polyline(r.pts, r.width / 2, r.kind === 'catwalk' ? 5 : 12);
+  for (const a of areas) if (!a.gladed) clear.polygon(a.pts, 15);
+  for (const t of nordicTrails) clear.polyline(t.pts, t.width / 2 + 2, 4);
+
+  // --- Real tree cover from aerial imagery over the ski area.
+  const canopyAt = makeCanopy(geo.trees);
+  // How open the ground is (0 = forest, 1 = open): the real canopy where we
+  // have it, blended into the run-based mask toward the edge of its box.
+  const openAt = (x, z) => {
+    const c = canopyAt(x, z);
+    if (c === null) return clear.at(x, z);
+    const real = Math.max(cut.at(x, z), 1 - smoothstep(0.22, 0.6, c.v));
+    return c.w >= 1 ? real : real * c.w + clear.at(x, z) * (1 - c.w);
+  };
+
+  // --- Landmarks: named high points (label anchors).
+  const landmarks = LANDMARKS.map((m) => {
+    // Snap to the highest ground within `search` meters of the given spot.
+    let best = { x: m.at[0], z: m.at[1], y: -Infinity };
+    hf.forEachNear(m.at[0], m.at[1], m.search || 0, (k, cx, cz) => {
+      if (hf.h[k] > best.y) best = { x: cx, z: cz, y: hf.h[k] };
+    });
+    if (!Number.isFinite(best.y)) best.y = H(best.x, best.z);
+    return { name: m.name, ...best };
+  });
+
+  // --- The painted trail map, fitted to the real positions of the lifts so
+  // the overlay and cursor dot line up.
+  const ties = [];
+  for (const t of TRAIL_MAP_TIES) {
+    const l = lifts.find((x) => x.id === t.lift);
+    if (!l) continue;
+    if (t.bottomPx) ties.push({ px: t.bottomPx, w: l.bottom });
+    if (t.topPx) ties.push({ px: t.topPx, w: l.top });
+  }
+  const toMapPx = fitTrailMap(ties);
 
   return {
-    hf, lifts, lodges, roads, parking, runs, clear, features, lakes, lakeAt, nordicTrails,
-    treeline: TREELINE_M,
+    hf, region, groundAt, lifts, lodges, buildings, roads, parking, runs, areas, clear, cut, openAt, canopyAt, lakes, lakeAt, nordicTrails,
+    landmarks, toMapPx, treeline: TREELINE_M,
   };
+}
+
+// Bilinear lookup into the baked tree-cover grid: {v: 0..1 canopy, w: 0..1
+// confidence that fades to 0 at the grid's edge}, or null outside it.
+function makeCanopy(data) {
+  const { minX, minZ, size, n } = GEO.trees;
+  if (!data || data.length !== n * n) return () => null;
+  const cell = size / n;
+  const FADE = 200;
+  const out = { v: 0, w: 0 };
+  return (x, z) => {
+    const fx = (x - minX) / cell - 0.5;
+    const fz = (z - minZ) / cell - 0.5;
+    if (fx < 0 || fz < 0 || fx >= n - 1 || fz >= n - 1) return null;
+    const i = Math.floor(fx);
+    const j = Math.floor(fz);
+    const tx = fx - i;
+    const tz = fz - j;
+    const k = j * n + i;
+    const a = data[k] + (data[k + 1] - data[k]) * tx;
+    const b = data[k + n] + (data[k + n + 1] - data[k + n]) * tx;
+    out.v = (a + (b - a) * tz) / 255;
+    const edge = Math.min(x - minX, z - minZ, minX + size - x, minZ + size - z);
+    out.w = Math.min(1, edge / FADE);
+    return out;
+  };
+}
+
+// Bilinear height from a regional grid, or null outside it.
+function sampleRegion(r, x, z) {
+  if (!r) return null;
+  const fx = (x - r.minX) / r.cell;
+  const fz = (z - r.minZ) / r.cell;
+  if (fx < 0 || fz < 0 || fx >= r.n - 1 || fz >= r.n - 1) return null;
+  const i = Math.floor(fx);
+  const j = Math.floor(fz);
+  const tx = fx - i;
+  const tz = fz - j;
+  const k = j * r.n + i;
+  const a = r.h[k] + (r.h[k + 1] - r.h[k]) * tx;
+  const b = r.h[k + r.n] + (r.h[k + r.n + 1] - r.h[k + r.n]) * tx;
+  return a + (b - a) * tz;
 }

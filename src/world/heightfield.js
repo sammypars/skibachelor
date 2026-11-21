@@ -150,6 +150,46 @@ export class Mask {
     this.segment(x, z, x + 0.01, z, radius, feather, value);
   }
 
+  // Fill a polygon ({x, z} points) with a feathered edge outside it.
+  polygon(points, feather = 8, value = 1) {
+    const { px, res, minX, minZ, data } = this;
+    let x0 = Infinity;
+    let x1 = -Infinity;
+    let z0 = Infinity;
+    let z1 = -Infinity;
+    for (const p of points) {
+      x0 = Math.min(x0, p.x);
+      x1 = Math.max(x1, p.x);
+      z0 = Math.min(z0, p.z);
+      z1 = Math.max(z1, p.z);
+    }
+    const i0 = Math.max(0, Math.floor((x0 - feather - minX) / px));
+    const i1 = Math.min(res - 1, Math.ceil((x1 + feather - minX) / px));
+    const j0 = Math.max(0, Math.floor((z0 - feather - minZ) / px));
+    const j1 = Math.min(res - 1, Math.ceil((z1 + feather - minZ) / px));
+    const n = points.length;
+    for (let j = j0; j <= j1; j++) {
+      const cz = minZ + (j + 0.5) * px;
+      for (let i = i0; i <= i1; i++) {
+        const cx = minX + (i + 0.5) * px;
+        let inside = false;
+        let dmin = Infinity;
+        for (let a = 0, b = n - 1; a < n; b = a++) {
+          const A = points[a];
+          const B = points[b];
+          if (A.z > cz !== B.z > cz && cx < ((B.x - A.x) * (cz - A.z)) / (B.z - A.z) + A.x) inside = !inside;
+          const vx = B.x - A.x;
+          const vz = B.z - A.z;
+          const t = Math.max(0, Math.min(1, ((cx - A.x) * vx + (cz - A.z) * vz) / (vx * vx + vz * vz || 1)));
+          dmin = Math.min(dmin, Math.hypot(cx - A.x - vx * t, cz - A.z - vz * t));
+        }
+        const v = value * (inside ? 1 : 1 - smoothstep(0, feather, dmin));
+        const k = j * res + i;
+        if (v > data[k]) data[k] = v;
+      }
+    }
+  }
+
   polyline(points, halfWidth, feather = 8, value = 1) {
     for (let i = 0; i < points.length - 1; i++) {
       const a = points[i];

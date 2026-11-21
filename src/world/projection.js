@@ -1,48 +1,63 @@
-// Converts between trail-map pixels and 3D world coordinates.
+// Relates the world to the painted trail map (reference/trail-map.webp).
 //
-// World axes (meters): +x = west (right on the trail map), +z = north (toward
-// the trail-map viewer), +y = elevation above sea level. The summit is at
-// x = 0, z = 0.
-//
-// The painting is modelled as an oblique view from the north, pitched down by
-// viewPitchDeg, with a mild perspective that makes the bottom of the map
-// (closer to the painter) larger than the top.
+// The painting looks south at the mountain from the north, exaggerated and
+// bent like every hand-painted ski map, so no exact camera reproduces it.
+// Instead, a few tie points (lift terminals: their pixel on the painting and
+// their real 3D position) are fitted with a least-squares map
+//   u, v = linear in (x, y, z) + a quadratic in x and z
+// which follows the painter's distortions well enough for the overlay dot.
 
-import { PROJECTION as P, TRAIL_MAP, FT } from '../data/mountain.js';
-
-const pitch = (P.viewPitchDeg * Math.PI) / 180;
-const sinP = Math.sin(pitch);
-const cosP = Math.cos(pitch);
-const summitM = P.summitElevFt * FT;
-
-function persp(v) {
-  return P.perspFar + ((P.perspNear - P.perspFar) * v) / TRAIL_MAP.height;
-}
-
-// Unproject a pixel when the elevation at that spot is known.
-export function pxToWorld(u, v, elevM) {
-  const x = (u - P.summitPx[0]) / (P.pxPerMeter * persp(v));
-  const z = ((v - P.summitPx[1]) / P.pxPerMeter - (summitM - elevM) * cosP) / sinP;
-  return { x, z };
-}
-
-// Unproject a pixel onto a terrain surface (elevation unknown).
-export function pxToSurface(u, v, heightFn, guessM = 2000) {
-  let h = guessM;
-  let p = pxToWorld(u, v, h);
-  for (let i = 0; i < 12; i++) {
-    h = heightFn(p.x, p.z);
-    p = pxToWorld(u, v, h);
+function solve(A, b) {
+  // Normal equations with Gaussian elimination (tiny systems only).
+  const n = A[0].length;
+  const M = Array.from({ length: n }, (_, i) => {
+    const row = new Array(n + 1).fill(0);
+    for (let r = 0; r < A.length; r++) {
+      for (let j = 0; j < n; j++) row[j] += A[r][i] * A[r][j];
+      row[n] += A[r][i] * b[r];
+    }
+    row[i] += 1e-6; // keep it well-posed
+    return row;
+  });
+  for (let c = 0; c < n; c++) {
+    let p = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+    [M[c], M[p]] = [M[p], M[c]];
+    for (let r = 0; r < n; r++) {
+      if (r === c) continue;
+      const f = M[r][c] / M[c][c];
+      for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k];
+    }
   }
-  return { x: p.x, y: heightFn(p.x, p.z), z: p.z };
+  return M.map((row, i) => row[n] / row[i]);
 }
 
-// Project a world point back onto the trail map (for debugging / overlays).
-export function worldToPx(x, y, z) {
-  const v = P.summitPx[1] + P.pxPerMeter * (z * sinP + (summitM - y) * cosP);
-  const u = P.summitPx[0] + x * P.pxPerMeter * persp(v);
-  return [u, v];
-}
+const S = 1 / 1000; // work in km so the quadratic terms stay well scaled
+const terms = (x, y, z) => {
+  const X = x * S;
+  const Y = y * S;
+  const Z = z * S;
+  return [1, X, Y, Z, X * X, Z * Z, X * Z];
+};
 
-export const SUMMIT_M = summitM;
-export { FT };
+// ties: [{ px: [u, v], w: { x, y, z } }] -> (x, y, z) => [u, v]
+export function fitTrailMap(ties) {
+  const A = ties.map((t) => terms(t.w.x, t.w.y, t.w.z));
+  const cu = solve(A, ties.map((t) => t.px[0]));
+  const cv = solve(A, ties.map((t) => t.px[1]));
+  const fn = (x, y, z) => {
+    const f = terms(x, y, z);
+    let u = 0;
+    let v = 0;
+    for (let i = 0; i < f.length; i++) {
+      u += cu[i] * f[i];
+      v += cv[i] * f[i];
+    }
+    return [u, v];
+  };
+  fn.residuals = ties.map((t) => {
+    const [u, v] = fn(t.w.x, t.w.y, t.w.z);
+    return Math.hypot(u - t.px[0], v - t.px[1]);
+  });
+  return fn;
+}

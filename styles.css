@@ -231,6 +231,26 @@ button {
   background: var(--ink);
   color: #fff;
 }
+/* Run names, like the painted map: small black-on-white with the difficulty symbol. */
+.label.run {
+  background: rgba(255, 255, 255, 0.9);
+  color: #1b2733;
+  font-size: 10px;
+  padding: 2px 6px 2px 4px;
+  border-radius: 3px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+}
+.label.run i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 4px;
+  vertical-align: -0.5px;
+}
+.label.run i.green { background: #2e9d4a; border-radius: 50%; }
+.label.run i.blue { background: #1f5fbf; }
+.label.run i.black { background: #111; transform: rotate(45deg) scale(0.85); }
+.label.run i.double { background: #111; transform: rotate(45deg) scale(0.85); box-shadow: 7px -7px 0 #111; margin-right: 10px; }
 
 /* ------------------------------------------------------------ hud */
 #hud {
@@ -257,7 +277,8 @@ button {
   color: var(--muted);
 }
 
-#ride-hud {
+#ride-hud,
+#drone-hud {
   position: fixed;
   left: 50%;
   bottom: 22px;
@@ -271,7 +292,8 @@ button {
   color: #fff;
   font-weight: 600;
 }
-#ride-hud em {
+#ride-hud em,
+#drone-hud em {
   font-style: normal;
   font-weight: 500;
   color: #b9c9d8;
@@ -352,5 +374,231 @@ button {
     left: 16px;
     right: 16px;
     min-width: 0;
+  }
+}
+
+/* ------------------------------------------------------------ data credit */
+.credit {
+  position: fixed;
+  left: 16px;
+  bottom: 8px;
+  font: 500 10px/1.3 Inter, sans-serif;
+  color: rgba(255, 255, 255, 0.85);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------ drone */
+.drone-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--accent);
+  font-weight: 600;
+}
+.drone-toggle:hover,
+.drone-toggle.on {
+  background: var(--accent);
+  color: #fff;
+}
+.drone-toggle.on kbd {
+  border-color: transparent;
+}
+#ride-hud,
+#drone-hud {
+  max-width: calc(100vw - 32px);
+  flex-wrap: wrap;
+  justify-content: center;
+  white-space: nowrap;
+}
+#drone-hud kbd {
+  margin: 0 1px;
+}
+#ride-hud[hidden],
+#drone-hud[hidden] {
+  display: none;
+}
+/* While flying, tuck the panel and HUD away so the view is clear. */
+body.flying #panel,
+body.flying #hud {
+  opacity: 0.35;
+  transition: opacity 0.3s;
+}
+body.flying #panel:hover {
+  opacity: 1;
+}
+@media (max-width: 720px) {
+  #drone-hud {
+    top: 16px;
+    bottom: auto;
+    border-radius: 16px;
+  }
+  #drone-hud em {
+    display: none;
+  }
+}
+
+/* ------------------------------------------------------------ ski mode */
+.ski-toggle {
+  background: #ffc20e;
+  color: #131416;
+  border-color: #131416;
+}
+#ski-hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+  font-family: 'Barlow Condensed', Impact, sans-serif;
+  color: #fff;
+}
+#ski-hud[hidden] {
+  display: none;
+}
+.ski-top {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  gap: 10px;
+}
+.ski-top span {
+  background: rgba(19, 20, 22, 0.82);
+  border-left: 4px solid #ffc20e;
+  padding: 6px 12px;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  min-width: 70px;
+  text-align: right;
+}
+.ski-toast {
+  position: absolute;
+  top: 22%;
+  left: 50%;
+  transform: translate(-50%, 10px);
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.2s;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+}
+.ski-toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+.ski-toast b {
+  display: block;
+  font-size: clamp(32px, 6vw, 60px);
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #ffc20e;
+}
+.ski-toast span {
+  font-size: 20px;
+  font-weight: 700;
+}
+.ski-loadbar {
+  position: absolute;
+  left: 50%;
+  bottom: 120px;
+  width: 160px;
+  height: 6px;
+  transform: translateX(-50%);
+  background: rgba(19, 20, 22, 0.5);
+}
+.ski-loadbar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: #ffc20e;
+}
+.ski-pad {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.ski-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ski-pad button {
+  width: 54px;
+  height: 54px;
+  border-radius: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  background: rgba(19, 20, 22, 0.55);
+  color: #fff;
+  font: 800 20px 'Barlow Condensed', Impact, sans-serif;
+  cursor: pointer;
+}
+.ski-col button {
+  height: 40px;
+}
+.ski-pad button.on {
+  background: #ffc20e;
+  color: #131416;
+  border-color: #131416;
+}
+.ski-pad .ski-pop {
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  background: #ffc20e;
+  color: #131416;
+  border-color: #131416;
+  font-size: 24px;
+}
+.ski-pad .ski-pop.on {
+  background: #fff;
+}
+.ski-pad .ski-grab {
+  font-size: 15px;
+}
+.ski-help {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  max-width: calc(100% - 420px);
+  font: 600 14px/1.6 system-ui, sans-serif;
+  font-style: normal;
+  background: rgba(19, 20, 22, 0.6);
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+.ski-help kbd {
+  background: rgba(255, 255, 255, 0.18);
+  border: 0;
+  box-shadow: none;
+  color: #ffc20e;
+  border-radius: 4px;
+  padding: 0 5px;
+  font: inherit;
+  font-weight: 800;
+}
+body.skiing #panel,
+body.skiing #hud,
+body.skiing #labels {
+  opacity: 0;
+  pointer-events: none;
+}
+@media (max-width: 700px) {
+  .ski-help {
+    display: none;
   }
 }

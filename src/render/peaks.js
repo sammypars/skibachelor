@@ -111,37 +111,61 @@ export function buildPeaks() {
 }
 
 // ------------------------------------------------------------------ clouds
+// Soft cumulus: each cloud is a cluster of billboard puffs drawn from a
+// few soft, lumpy canvas textures, lit from above (bright tops, grey bases).
+function puffTexture(seed) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  const noise = makeNoise2(seed);
+  for (let k = 0; k < 26; k++) {
+    const a = k * 2.399;
+    const r = 30 + 60 * Math.abs(noise(k, 1.3));
+    const x = 128 + Math.cos(a) * r * 0.9;
+    const y = 140 + Math.sin(a) * r * 0.45 - 10;
+    const s = 38 + 30 * Math.abs(noise(k, 7.1));
+    const g = ctx.createRadialGradient(x, y - s * 0.3, 0, x, y, s);
+    const shade = Math.round(255 - Math.max(0, y - 120) * 0.55);
+    g.addColorStop(0, `rgba(${shade},${shade},${Math.min(255, shade + 6)},0.55)`);
+    g.addColorStop(0.6, `rgba(${shade - 8},${shade - 6},${shade},0.25)`);
+    g.addColorStop(1, 'rgba(230,236,244,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, s, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
 export function buildClouds() {
   const group = new THREE.Group();
   const noise = makeNoise2(88);
-  const geo = new THREE.IcosahedronGeometry(1, 1);
-  const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, fog: false, emissive: 0xaebfd2, emissiveIntensity: 0.55 });
-  const puffs = [];
-  for (let i = 0; i < 16; i++) {
-    const ang = (i / 16) * Math.PI * 2 + noise(i, 0.3) * 0.4;
-    const r = 16000 + 14000 * (0.5 + 0.5 * noise(i * 1.7, 4.1));
+  const mats = [11, 12, 13].map(
+    (seed) => new THREE.SpriteMaterial({ map: puffTexture(seed), fog: false, depthWrite: false, transparent: true, opacity: 0.95 }),
+  );
+  for (let i = 0; i < 18; i++) {
+    const ang = (i / 18) * Math.PI * 2 + noise(i, 0.3) * 0.4;
+    const r = 16000 + 16000 * (0.5 + 0.5 * noise(i * 1.7, 4.1));
     const cx = Math.sin(ang) * r;
     const cz = Math.cos(ang) * r;
-    const cy = 4200 + 900 * noise(i, 9);
-    const size = 700 + 600 * (0.5 + 0.5 * noise(i, 2));
-    const count = 5 + (i % 4);
+    const cy = 4300 + 900 * noise(i, 9);
+    const size = 900 + 800 * (0.5 + 0.5 * noise(i, 2));
+    const count = 4 + (i % 4);
     for (let k = 0; k < count; k++) {
-      const t = k / (count - 1) - 0.5;
-      puffs.push({
-        x: cx + t * size * 2.6 + noise(i, k) * size * 0.3,
-        y: cy + (1 - Math.abs(t) * 2) * size * 0.25,
-        z: cz + noise(k, i) * size * 0.5,
-        s: size * (0.55 + 0.45 * (1 - Math.abs(t) * 1.6)),
-      });
+      const t = count > 1 ? k / (count - 1) - 0.5 : 0;
+      const sp = new THREE.Sprite(mats[(i + k) % mats.length]);
+      const s = size * (1.4 + 0.9 * (1 - Math.abs(t) * 1.4));
+      sp.scale.set(s * 1.6, s, 1);
+      sp.position.set(
+        cx + t * size * 2.4 + noise(i, k) * size * 0.3,
+        cy + (1 - Math.abs(t) * 2) * size * 0.2,
+        cz + noise(k, i) * size * 0.5,
+      );
+      sp.renderOrder = -1;
+      group.add(sp);
     }
   }
-  const im = new THREE.InstancedMesh(geo, mat, puffs.length);
-  const m = new THREE.Matrix4();
-  puffs.forEach((p, k) => {
-    m.compose(new THREE.Vector3(p.x, p.y, p.z), new THREE.Quaternion(), new THREE.Vector3(p.s, p.s * 0.55, p.s * 0.8));
-    im.setMatrixAt(k, m);
-  });
-  im.frustumCulled = false;
-  group.add(im);
   return group;
 }

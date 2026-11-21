@@ -1,10 +1,11 @@
 {
   "name": "skibachelor",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "python3 -m http.server 5174",
-    "check": "node tools/check-world.js"
+    "check": "node tools/check-world.js",
+    "geo": "node tools/fetch-geo.mjs"
   }
 }

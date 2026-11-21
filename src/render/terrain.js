@@ -7,7 +7,7 @@ const TEX = 2048;
 // Paints the ground texture: snow, groomed runs, shaded forest floor,
 // roads and parking lots.
 function paintGround(world) {
-  const { hf, clear, roads, parking, treeline } = world;
+  const { hf, clear, openAt, roads, parking, treeline } = world;
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = TEX;
   const ctx = canvas.getContext('2d');
@@ -21,9 +21,16 @@ function paintGround(world) {
     for (let i = 0; i < TEX; i++) {
       const x = hf.minX + (i + 0.5) * px;
       const y = hf.heightAt(x, z);
-      const open = clear.at(x, z);
+      const open = openAt(x, z);
+      const real = world.canopyAt(x, z);
       // 1 = deep forest floor, 0 = open snow
-      const forest = (1 - open) * (1 - smoothstep(treeline - 120, treeline + 40, y));
+      // Thins out over a few hundred meters below treeline, so the upper forest
+      // reads as scattered snowy trees like the painting, not a hard edge.
+      // Where the real tree cover is known it already has that edge.
+      const thinP = 1 - smoothstep(treeline - 340, treeline + 30, y + 40 * fbm(x / 400, z / 400, 2));
+      const thin = real ? thinP + (1 - thinP) * real.w * 0.85 : thinP;
+      // Trees are only planted where open < 0.35, so match that edge.
+      const forest = (1 - smoothstep(0.12, 0.38, open)) * thin * (0.55 + 0.45 * thin);
       const n = fbm(x / 90, z / 90, 2);
       const big = fbm(x / 700, z / 700, 2);
 
@@ -51,7 +58,7 @@ function paintGround(world) {
       const speck = Math.max(0, fbm(x / 14, z / 14, 2));
       canopy[j * TEX + i] = 255 * forest * (0.95 - speck * 0.45) * (0.9 + big * 0.2);
       // Groomed runs: a touch warmer/brighter.
-      if (open > 0.5 && y < treeline + 80) {
+      if (clear.at(x, z) > 0.5 && y < treeline + 80) {
         r += 2;
         g += 2;
       }
@@ -90,13 +97,16 @@ function paintGround(world) {
       ctx.stroke();
     }
   }
+  // Parking lots: real outlines, plowed asphalt with a snowbank rim.
   for (const lot of parking) {
-    ctx.save();
-    ctx.translate(...toC(lot));
-    ctx.rotate(-lot.yaw);
+    ctx.beginPath();
+    lot.outline.forEach((p, i) => (i ? ctx.lineTo(...toC(p)) : ctx.moveTo(...toC(p))));
+    ctx.closePath();
     ctx.fillStyle = '#7b8189';
-    ctx.fillRect((-lot.size[0] / 2) * m, (-lot.size[1] / 2) * m, lot.size[0] * m, lot.size[1] * m);
-    ctx.restore();
+    ctx.fill();
+    ctx.strokeStyle = '#d7dde3';
+    ctx.lineWidth = 5 * m;
+    ctx.stroke();
   }
 
   const map = new THREE.CanvasTexture(canvas);

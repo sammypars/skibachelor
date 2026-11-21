@@ -94,7 +94,102 @@ function makeTextures() {
       ctx.fillRect(0, (i / 10) * s, s, 2);
     }
   });
-  return { woodWin, woodWinGlow, wood, darkWood, stone, metal, door };
+  // Pine Marten: pale grey-tan panels with a continuous band of glass and
+  // slim mullions (one tile = one storey).
+  const panelBase = (ctx, s, color) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(0, 0, s, s);
+    ctx.fillStyle = 'rgba(0,0,0,0.08)';
+    for (let i = 0; i < 4; i++) ctx.fillRect((i / 4) * s, 0, 2, s); // panel joints
+  };
+  const ribbon = canvasTex((ctx, s) => {
+    panelBase(ctx, s, '#c9c3b6');
+    const y = s * 0.16;
+    const h = s * 0.5;
+    const g = ctx.createLinearGradient(0, y, 0, y + h);
+    g.addColorStop(0, '#5d7487');
+    g.addColorStop(1, '#22313f');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, y, s, h);
+    ctx.fillStyle = '#8d8a84';
+    for (let i = 0; i < 2; i++) ctx.fillRect((i / 2) * s, y, 5, h); // mullions
+    ctx.fillRect(0, y + h - 4, s, 4);
+    ctx.fillStyle = 'rgba(255,255,255,0.16)';
+    ctx.fillRect(0, y, s, h * 0.18);
+  });
+  const ribbonGlow = canvasTex((ctx, s) => {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, s, s);
+    ctx.fillStyle = '#5a3e1c';
+    ctx.fillRect(0, s * 0.36, s, s * 0.3);
+  });
+  const panel = canvasTex((ctx, s) => panelBase(ctx, s, '#c9c3b6'));
+  // West Village: tan siding, rectangular windows with dark frames.
+  const siding = (ctx, s, color) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 24; i++) {
+      ctx.fillStyle = 'rgba(60,40,20,0.10)';
+      ctx.fillRect(0, (i / 24) * s, s, 2);
+    }
+  };
+  const punched = (ctx, s, frame) => {
+    const [x, y, w, h] = [s * 0.12, s * 0.22, s * 0.76, s * 0.48];
+    ctx.fillStyle = frame;
+    ctx.fillRect(x - 5, y - 5, w + 10, h + 10);
+    const g = ctx.createLinearGradient(0, y, 0, y + h);
+    g.addColorStop(0, '#4f677b');
+    g.addColorStop(1, '#1e2c39');
+    ctx.fillStyle = g;
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = frame;
+    ctx.fillRect(x + w / 2 - 2, y, 4, h);
+  };
+  const tanWin = canvasTex((ctx, s) => {
+    siding(ctx, s, '#c4a77d');
+    punched(ctx, s, '#3b3027');
+  });
+  const tan = canvasTex((ctx, s) => siding(ctx, s, '#c4a77d'));
+  // Sunrise: white stucco with dark-framed square windows.
+  const stuccoBase = (ctx, s) => {
+    ctx.fillStyle = '#ecebe6';
+    ctx.fillRect(0, 0, s, s);
+    for (let i = 0; i < 400; i++) {
+      ctx.fillStyle = `rgba(0,0,0,${0.015 + rand() * 0.02})`;
+      ctx.fillRect(rand() * s, rand() * s, 3, 3);
+    }
+  };
+  const stuccoWin = canvasTex((ctx, s) => {
+    stuccoBase(ctx, s);
+    punched(ctx, s, '#22262b');
+  });
+  const stucco = canvasTex((ctx, s) => stuccoBase(ctx, s));
+  const punchedGlow = canvasTex((ctx, s) => {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, s, s);
+    ctx.fillStyle = '#5a3e1c';
+    ctx.fillRect(s * 0.12, s * 0.45, s * 0.76, s * 0.25);
+  });
+  return { woodWin, woodWinGlow, wood, darkWood, stone, metal, door, ribbon, ribbonGlow, panel, tanWin, tan, stuccoWin, stucco, punchedGlow };
+}
+
+// A sign board with lettering.
+function signTexture(text, bg = '#1c2733', fg = '#ffffff') {
+  const c = document.createElement('canvas');
+  c.width = 1024;
+  c.height = 160;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.fillStyle = fg;
+  ctx.font = '700 96px "Barlow Condensed", Impact, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text.toUpperCase(), c.width / 2, c.height / 2 + 6);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
 }
 
 let MATS = null;
@@ -116,6 +211,15 @@ function mats() {
     steel: std({ color: 0x3a3f45, roughness: 0.5, metalness: 0.5 }),
     catRed: std({ color: 0xc8262c, roughness: 0.5 }),
     track: std({ color: 0x1f2226, roughness: 0.9 }),
+    ribbon: std({ map: t.ribbon, emissive: 0xffb25e, emissiveMap: t.ribbonGlow, emissiveIntensity: 0.45, roughness: 0.5 }),
+    panel: std({ map: t.panel }),
+    tanWin: std({ map: t.tanWin, emissive: 0xffb25e, emissiveMap: t.punchedGlow, emissiveIntensity: 0.45 }),
+    tan: std({ map: t.tan }),
+    stuccoWin: std({ map: t.stuccoWin, emissive: 0xffb25e, emissiveMap: t.punchedGlow, emissiveIntensity: 0.45 }),
+    stucco: std({ map: t.stucco }),
+    slate: std({ color: 0x3b4047, roughness: 0.7 }),
+    railing: std({ color: 0x5b6168, roughness: 0.5, metalness: 0.4 }),
+    railGlass: std({ color: 0x9fb4c4, roughness: 0.1, metalness: 0.2, transparent: true, opacity: 0.45 }),
   };
   // ExtrudeGeometry UVs are in meters; scale gable-end wood to the 4 m tile.
   MATS.gableEnd = MATS.wood.clone();
@@ -310,7 +414,141 @@ function garage(b, M) {
   return g;
 }
 
-const STYLES = { hall, aframe, wing, shed, hut, garage };
+// ------------------------------------------------------------------ real lodges
+// Modelled on photos of the actual buildings. Local +z * side is the
+// downhill front (b.deck carries the side).
+
+function flatRoof(g, w, d, x, y, z, M) {
+  g.add(mesh(new THREE.BoxGeometry(w + 0.8, 0.55, d + 0.8), M.slate, x, y + 0.27, z));
+  g.add(mesh(new THREE.BoxGeometry(w + 0.5, 0.35, d + 0.5), M.snow, x, y + 0.7, z));
+}
+
+// Glass deck railing along local x.
+function railing(g, len, x, y, z, M) {
+  g.add(mesh(new THREE.BoxGeometry(len, 1.0, 0.06), M.railGlass, x, y + 0.55, z));
+  g.add(mesh(new THREE.BoxGeometry(len, 0.09, 0.12), M.railing, x, y + 1.1, z));
+}
+
+function sign(g, text, w, h, x, y, z, side, colors = []) {
+  const m = mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({ map: signTexture(text, ...colors), roughness: 0.6 }), x, y, z);
+  m.rotation.y = side > 0 ? 0 : Math.PI;
+  g.add(m);
+}
+
+// Pine Marten Lodge (1988): three stepped tiers wrapped in continuous bands
+// of glass, flat roofs that double as decks with glass railings, pale panel
+// walls on a lava-rock base, a square tower with a steep dark hipped roof,
+// and a dark gable at one end.
+function pineMarten(b, M) {
+  const g = new THREE.Group();
+  const s = b.deck || 1;
+  const plinth = 1.6;
+  g.add(mesh(tiledBox(b.w + 0.4, plinth, b.d + 0.4), M.stone, 0, plinth / 2, 0));
+  const tiers = [
+    { w: b.w, d: b.d, h: 5 },
+    { w: b.w * 0.93, d: b.d * 0.66, h: 4.4 },
+    { w: b.w * 0.8, d: b.d * 0.38, h: 4.4 },
+  ];
+  let y = plinth;
+  tiers.forEach((t, i) => {
+    const z = -s * (b.d - t.d) / 2; // tiers line up at the back, step back from the front
+    g.add(mesh(tiledBox(t.w, t.h, t.d), M.ribbon, 0, y + t.h / 2, z));
+    y += t.h;
+    flatRoof(g, t.w, t.d, 0, y, z, M);
+    const next = tiers[i + 1];
+    if (next) {
+      // The roof in front of the next tier up is a deck.
+      railing(g, t.w - 1, 0, y + 0.8, z + s * (t.d / 2 - 0.2), M);
+    }
+  });
+  // Dark gable over the east end of the middle tier.
+  const t1 = tiers[1];
+  const gw = 15;
+  const gable = mesh(gableRoof(t1.d * 0.9, gw, 5.5, 0.8), [M.panel, M.slate], t1.w / 2 - gw / 2 - 1, plinth + tiers[0].h + t1.h, -s * (b.d - t1.d) / 2);
+  gable.rotation.y = Math.PI / 2;
+  g.add(gable);
+  // The tower, at the back, rising above the top tier.
+  const tw = 9;
+  const top = y + 6;
+  const tx = -b.w * 0.2;
+  const tz = -s * (b.d / 2 - tw / 2 - 1.5);
+  g.add(mesh(tiledBox(tw, top, tw), M.panel, tx, top / 2, tz));
+  g.add(mesh(tiledBox(tw + 0.1, 4, tw + 0.1), M.ribbon, tx, top - 2.4, tz));
+  const hip = mesh(new THREE.ConeGeometry(tw * 0.8, 7.5, 4, 1).rotateY(Math.PI / 4), M.slate, tx, top + 3.75, tz);
+  g.add(hip);
+  g.add(mesh(new THREE.CylinderGeometry(0.12, 0.12, 3, 6), M.steel, tx, top + 8.5, tz)); // antenna
+  deck(g, b.w * 0.75, b.d, s, M);
+  return g;
+}
+
+// West Village Lodge: a tan two-storey block with rows of dark-framed
+// windows, the upper floor reaching out over the lower, a taller center,
+// flat roofs, and an outside stair up to the deck.
+function westVillage(b, M) {
+  const g = new THREE.Group();
+  const s = b.deck || 1;
+  const fh = 4.4;
+  g.add(mesh(tiledBox(b.w, fh, b.d), M.tanWin, 0, fh / 2, 0));
+  const uw = b.w * 0.84;
+  const ud = b.d * 0.88;
+  const uz = s * 1.4;
+  g.add(mesh(tiledBox(uw, fh, ud), M.tanWin, 0, fh * 1.5, uz));
+  flatRoof(g, b.w, b.d, 0, fh, 0, M);
+  flatRoof(g, uw, ud, 0, fh * 2, uz, M);
+  const cw = b.w * 0.3;
+  const cd = b.d * 0.5;
+  g.add(mesh(tiledBox(cw, 3.6, cd), M.tan, b.w * 0.1, fh * 2 + 1.8, -s * b.d * 0.08));
+  flatRoof(g, cw, cd, b.w * 0.1, fh * 2 + 3.6, -s * b.d * 0.08, M);
+  // Outside stair along the front, up to the upper deck.
+  const run = 10;
+  const stair = mesh(new THREE.BoxGeometry(run + 1, 0.35, 2.2), M.darkWood, b.w / 2 - run / 2 - 2, fh / 2, s * (b.d / 2 + 1.5));
+  stair.rotation.z = Math.atan2(fh, run);
+  g.add(stair);
+  railing(g, run + 1, b.w / 2 - run / 2 - 2, fh / 2 - 0.2, s * (b.d / 2 + 2.6), M);
+  sign(g, 'West Village Lodge', 16, 2.4, -b.w * 0.15, fh * 2 - 1.2, uz + s * (ud / 2 + 0.06), s);
+  deck(g, b.w * 0.5, b.d, s, M);
+  return g;
+}
+
+// Sunrise Lodge: white stucco, two storeys of dark-framed windows under a
+// low dark roof, with a square tower in the middle of the front carrying
+// the lodge's name.
+function sunrise(b, M) {
+  const g = new THREE.Group();
+  const s = b.deck || 1;
+  const h = 8;
+  g.add(mesh(tiledBox(b.w, h, b.d), M.stuccoWin, 0, h / 2, 0));
+  g.add(mesh(gableRoof(b.w, b.d, b.d * 0.16, 1.2), [M.stucco, M.slate], 0, h, 0));
+  const tw = 9;
+  const td = 6;
+  const th = 14.5;
+  const tz = s * (b.d / 2 - td / 2 + 1);
+  g.add(mesh(tiledBox(tw, th, td), M.stucco, 0, th / 2, tz));
+  flatRoof(g, tw, td, 0, th, tz, M);
+  sign(g, 'Sunrise Lodge', 8, 1.3, 0, th - 2.2, tz + s * (td / 2 + 0.06), s, ['#ecebe6', '#22262b']);
+  // Entry canopy under the tower.
+  g.add(mesh(new THREE.BoxGeometry(tw + 3, 0.4, 3.5), M.slate, 0, 3.4, tz + s * (td / 2 + 1.6)));
+  deck(g, b.w * 0.6, b.d, s, M);
+  return g;
+}
+
+// Mountain Gateway: newer timber-and-glass building on a stone base under a
+// broad, low, dark shed roof.
+function gateway(b, M) {
+  const g = new THREE.Group();
+  const s = b.deck || 1;
+  g.add(mesh(tiledBox(b.w + 0.4, 2, b.d + 0.4), M.stone, 0, 1, 0));
+  g.add(mesh(tiledBox(b.w, 5.5, b.d), M.woodWin, 0, 2 + 2.75, 0));
+  const roof = mesh(new THREE.BoxGeometry(b.w + 3, 0.6, b.d + 4), M.slate, 0, 8.3, 0);
+  roof.rotation.x = -s * 0.09; // rises toward the front
+  g.add(roof);
+  const snowCap = mesh(new THREE.BoxGeometry(b.w + 2.6, 0.3, b.d + 3.6), M.snow, 0, 8.75, 0);
+  snowCap.rotation.x = roof.rotation.x;
+  g.add(snowCap);
+  return g;
+}
+
+const STYLES = { hall, aframe, wing, shed, hut, garage, pineMarten, westVillage, sunrise, gateway };
 
 function summitHut(M) {
   const g = new THREE.Group();
@@ -322,6 +560,21 @@ function summitHut(M) {
 }
 
 // ------------------------------------------------------------------ parking
+// Inside the lot outline and at least `inset` meters from its edge.
+function inLot(x, z, pts, inset) {
+  let inside = false;
+  for (let a = 0, b = pts.length - 1; a < pts.length; b = a++) {
+    const A = pts[a];
+    const B = pts[b];
+    if (A.z > z !== B.z > z && x < ((B.x - A.x) * (z - A.z)) / (B.z - A.z) + A.x) inside = !inside;
+    const vx = B.x - A.x;
+    const vz = B.z - A.z;
+    const t = Math.max(0, Math.min(1, ((x - A.x) * vx + (z - A.z) * vz) / (vx * vx + vz * vz || 1)));
+    if (Math.hypot(x - A.x - vx * t, z - A.z - vz * t) < inset) return false;
+  }
+  return inside;
+}
+
 function parkedCars(lots) {
   const rand = seededRandom(97702);
   const spots = [];
@@ -336,7 +589,10 @@ function parkedCars(lots) {
         const lz = -d / 2 + 4 + r * 14 + (r % 2 ? 0 : 1.5);
         const cs = Math.cos(lot.yaw);
         const sn = Math.sin(lot.yaw);
-        spots.push({ x: lot.x + lx * cs + lz * sn, z: lot.z - lx * sn + lz * cs, y: lot.y, yaw: lot.yaw + (r % 2 ? Math.PI : 0) });
+        const x = lot.x + lx * cs + lz * sn;
+        const z = lot.z - lx * sn + lz * cs;
+        if (lot.outline && !inLot(x, z, lot.outline, 3.5)) continue;
+        spots.push({ x, z, y: lot.y, yaw: lot.yaw + (r % 2 ? Math.PI : 0) });
       }
     }
   }
@@ -368,19 +624,17 @@ function parkedCars(lots) {
 export function buildBuildings(world) {
   const M = mats();
   const group = new THREE.Group();
-  for (const l of world.lodges) {
-    if (l.id === 'summit-hut') {
-      const h = summitHut(M);
-      h.position.set(l.x, l.y - 0.3, l.z);
-      group.add(h);
-      continue;
-    }
-    for (const b of l.buildings) {
-      const obj = STYLES[b.style](b, M);
-      obj.position.set(b.wx, l.y - 0.3, b.wz);
-      obj.rotation.y = b.wyaw;
-      group.add(obj);
-    }
+  const summit = world.lodges.find((l) => l.id === 'summit-hut');
+  if (summit) {
+    const h = summitHut(M);
+    h.position.set(summit.x, summit.y - 0.3, summit.z);
+    group.add(h);
+  }
+  for (const b of world.buildings) {
+    const obj = STYLES[b.style](b, M);
+    obj.position.set(b.wx, b.y - 0.3, b.wz);
+    obj.rotation.y = b.wyaw;
+    group.add(obj);
   }
   group.add(parkedCars(world.parking));
   return group;

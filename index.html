@@ -23,7 +23,7 @@
 
     <header class="brand">
       <h1>Mt. Bachelor</h1>
-      <p>3D trail map · build 0.1</p>
+      <p>3D trail map · build 0.2</p>
     </header>
 
     <aside id="panel">
@@ -36,7 +36,13 @@
           <button data-view="sunrise">Sunrise</button>
           <button data-view="nordic">Nordic Center</button>
           <button data-view="backside">Outback / NW</button>
+          <button data-view="parks">Terrain parks</button>
+          <button data-view="pipe">Half pipe</button>
+          <button data-view="race">Race course</button>
         </div>
+        <button id="ski-toggle" class="drone-toggle ski-toggle" title="Ski it yourself, from the run nearest the view">Ski it <kbd>K</kbd></button>
+        <button id="ski-parks" class="drone-toggle" title="Drop into Pacific City, the top of the jump line">Ski the parks</button>
+        <button id="drone-toggle" class="drone-toggle" title="Fly freely with the keyboard and mouse">Fly drone <kbd>F</kbd></button>
       </section>
       <section>
         <h2>Lifts</h2>
@@ -45,8 +51,10 @@
       <section class="toggles">
         <h2>Show</h2>
         <label><input type="checkbox" data-toggle="labels" checked /> Labels <kbd>L</kbd></label>
+        <label><input type="checkbox" data-toggle="runs" checked /> Run names <kbd>R</kbd></label>
         <label><input type="checkbox" data-toggle="trees" checked /> Trees</label>
         <label><input type="checkbox" data-toggle="chairs" checked /> Moving chairs</label>
+        <label><input type="checkbox" data-toggle="people" checked /> Skiers</label>
         <label><input type="checkbox" data-toggle="map" /> Trail map overlay <kbd>M</kbd></label>
       </section>
     </aside>
@@ -59,13 +67,37 @@
     <div id="hud">
       <div><b>Cursor</b> <span class="cursor">—</span></div>
       <div><b>Camera</b> <span class="camera">—</span></div>
-      <div class="help">Drag to orbit · right-drag to pan · scroll to zoom · <kbd>1</kbd> trail-map view</div>
+      <div class="help">Drag to orbit · right-drag to pan · scroll to zoom · <kbd>1</kbd> trail-map view · <kbd>F</kbd> drone · <kbd>K</kbd> ski</div>
     </div>
 
-    <div id="ride-hud" hidden>
+    <div id="drone-hud" class="flight-hud" hidden>
+      <span></span>
+      <em><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> fly · <kbd>Space</kbd>/<kbd>Q</kbd> up/down · drag to look · <kbd>Shift</kbd> boost · scroll speed · <kbd>Esc</kbd> land</em>
+    </div>
+
+    <div id="ski-hud" hidden>
+      <div class="ski-top"><span class="ski-speed">0 mph</span><span class="ski-score">0</span></div>
+      <div class="ski-toast"></div>
+      <div class="ski-loadbar"><i class="ski-load"></i></div>
+      <div class="ski-pad" aria-label="Ski controls">
+        <button data-ski="left" aria-label="Carve or spin left">◀</button>
+        <div class="ski-col">
+          <button data-ski="up" aria-label="Tuck or frontflip">▲</button>
+          <button data-ski="down" aria-label="Brake or backflip">▼</button>
+        </div>
+        <button data-ski="right" aria-label="Carve or spin right">▶</button>
+        <button data-ski="grab" class="ski-grab">GRAB</button>
+        <button data-ski="pop" class="ski-pop">POP</button>
+      </div>
+      <em class="ski-help"><kbd>A</kbd><kbd>D</kbd> carve · spin &nbsp; <kbd>W</kbd> tuck · frontflip &nbsp; <kbd>S</kbd> brake · backflip &nbsp; hold <kbd>Space</kbd> pop &nbsp; <kbd>Shift</kbd> grab &nbsp; <kbd>R</kbd> reset &nbsp; <kbd>Esc</kbd> stop</em>
+    </div>
+
+    <div id="ride-hud" class="flight-hud" hidden>
       <span></span>
       <em><kbd>+</kbd>/<kbd>−</kbd> speed · <kbd>Esc</kbd> hop off</em>
     </div>
+
+    <footer class="credit">Terrain: USGS 3DEP via AWS Terrain Tiles · Lifts, runs &amp; buildings © OpenStreetMap contributors</footer>
 
     <div id="loading">
       <div class="spinner"></div>

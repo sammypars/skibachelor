@@ -1,14 +1,42 @@
 // Mt. Bachelor map data.
 //
-// Everything here is read off the official trail map (reference/trail-map.webp,
-// 726 x 544 px). Positions are trail-map pixel coordinates [u, v]; the
-// projection in ../world/projection.js turns them into 3D world positions.
-// Elevations are in feet (real-world values where known).
+// The ground is real elevation data and the lifts, runs, buildings, roads,
+// parking, Nordic trails and lakes are real OpenStreetMap geometry, baked by
+// tools/fetch-geo.mjs into src/data/geo/. This file adds what that data does
+// not say: lift types and colors, labels, building styles, and how the
+// painted trail map lines up.
 //
-// To "dial in" the map: nudge a pixel coordinate or an elevation here and
-// reload. Nothing else needs to change.
+// World axes (meters): +x = west, +z = north, +y = elevation above sea level.
+// The summit is at x = 0, z = 0.
 
 export const FT = 0.3048;
+
+export const GEO = {
+  origin: [-121.6886387, 43.9792838], // summit [lon, lat]
+  terrain: {
+    minX: -5200, // east edge (world +x is west)
+    minZ: -3800, // south edge
+    size: 10400,
+    n: 705, // grid points per side, ~14.8 m apart
+    offset: 1000, // stored as uint16: h = offset + value * step
+    step: 0.05,
+  },
+  // Tree cover over the ski area, classified from USGS aerial imagery (public
+  // domain): 0 = open ground, 255 = solid canopy. 4 m cells.
+  trees: {
+    minX: -3800,
+    minZ: -2400,
+    size: 6800,
+    n: 1700,
+  },
+  // Real terrain around the map out to the horizon volcanoes: a detailed
+  // ring (Broken Top, the Three Sisters) and a coarse one to Mt. Jefferson
+  // and Diamond Peak. Zoom = Terrarium tile level sampled.
+  region: {
+    mid: { minX: -22000, minZ: -18000, size: 44000, n: 734, zoom: 11 },
+    far: { minX: -70000, minZ: -70000, size: 160000, n: 641, zoom: 9 },
+  },
+};
 
 export const TRAIL_MAP = {
   src: './reference/trail-map.webp',
@@ -16,226 +44,215 @@ export const TRAIL_MAP = {
   height: 544,
 };
 
-// The trail map is painted looking roughly south at the mountain from the
-// north: east is on the left, west on the right, the summit near the top.
-// These numbers describe that painted "camera" so pixels can be unprojected.
-export const PROJECTION = {
-  summitPx: [348, 72],
-  summitElevFt: 9065,
-  pxPerMeter: 0.142, // horizontal scale at the summit's depth
-  viewPitchDeg: 35, // how steeply the painter looks down on the mountain
-  perspFar: 0.8, // scale factor at the top edge of the map
-  perspNear: 1.25, // scale factor at the bottom edge of the map
+// Chairlifts, matched to OpenStreetMap by `osm` name (bottom terminal is the
+// first point of the line). type: 'express' = detachable, 'fixed' =
+// fixed-grip.
+export const LIFTS = [
+  // terminal: the real terminal design (see render/lifts.js). pod =
+  // Doppelmayr Uni-G rounded canopy, cld = Doppelmayr CLD-260 box canopy,
+  // dline = Doppelmayr D-Line, enclosed = 1980s terminal buildings,
+  // fixed = fixed-grip bullwheel. seats = chair size.
+  { id: 'pine-marten', name: 'Pine Marten Express', osm: 'Pine Marten Express', type: 'express', terminal: 'pod', seats: 4 },
+  { id: 'summit', name: 'Summit Express', osm: 'Summit Express', type: 'express', terminal: 'enclosed', seats: 4 },
+  { id: 'red', name: 'Red Chair', osm: 'Red Chair', type: 'fixed', terminal: 'fixed', seats: 3, color: '#c8262c' },
+  { id: 'skyliner', name: 'Skyliner Express', osm: 'Skyliner Express', type: 'express', terminal: 'dline', seats: 6 },
+  { id: 'little-pine', name: 'Little Pine', osm: 'Little Pine', type: 'fixed', terminal: 'fixed', seats: 3 },
+  { id: 'sunrise', name: 'Sunrise Express', osm: 'Sunrise Express', type: 'express', terminal: 'cld', seats: 4 },
+  { id: 'rainbow', name: 'Rainbow', osm: 'Rainbow Chair', type: 'fixed', terminal: 'fixed', seats: 3 },
+  { id: 'alpenglow', name: 'Alpenglow', osm: 'Alpenglow', type: 'fixed', terminal: 'fixed', seats: 3 },
+  { id: 'early-riser', name: 'Early Riser', osm: 'Early Riser', type: 'fixed', terminal: 'fixed', seats: 2 },
+  { id: 'cloudchaser', name: 'Cloudchaser Express', osm: 'Cloudchaser', type: 'express', terminal: 'pod', seats: 4 },
+  { id: 'outback', name: 'Outback Express', osm: 'Outback Express', type: 'express', terminal: 'cld', seats: 4 },
+  { id: 'northwest', name: 'Northwest Express', osm: 'Northwest Express', type: 'express', terminal: 'cld', seats: 4 },
+];
+
+// Named places. `osm` anchors a lodge to its real building footprint; `base`
+// marks base areas (plowed roads and parking are kept near these).
+export const LODGES = [
+  { id: 'west-village', name: 'West Village Lodge', osm: 'West Village Lodge', base: true },
+  { id: 'pine-marten-lodge', name: "Pine Marten Lodge 7,775'", osm: 'Pine Marten Lodge' },
+  { id: 'sunrise-lodge', name: 'Sunrise Lodge', osm: 'Sunrise Lodge', base: true },
+  { id: 'nordic', name: 'Nordic Center', osm: 'Mt. Bachelor Nordic Center', base: true },
+  { id: 'summit-hut', name: "Summit 9,065'", at: [0, 0] },
+];
+
+// How to draw real building footprints, by OpenStreetMap name. Buildings not
+// listed get a plain shed (or a hut if small). A building can also be made
+// of `parts` laid out inside its footprint: dw/dd = share of the footprint's
+// length/depth, dx/dz = offset as a share of it (+dz = downhill side).
+// Styles: pineMarten, westVillage, sunrise, gateway (the real lodges), and
+// generic hall, aframe, wing, shed, garage, hut. deck: the building's front
+// (and its deck) faces downhill.
+export const BUILDING_STYLES = {
+  // Modelled on photos of the real buildings (see render/buildings.js).
+  'Pine Marten Lodge': { style: 'pineMarten', h: 22, deck: true },
+  'West Village Lodge': { style: 'westVillage', h: 12, deck: true },
+  'Sunrise Lodge': { style: 'sunrise', h: 15, deck: true },
+  'Mountain Gateway': { style: 'gateway', h: 9, deck: true },
+  'Mt. Bachelor Nordic Center': { style: 'hall', h: 8, deck: true },
+  'Guest Services': { style: 'shed', h: 7 },
+  'Bachelor Butte Administrative Building': { style: 'shed', h: 7 },
+  'Junior Racing Center': { style: 'shed', h: 7 },
+  'Mt. Bachelor Gravity Sports Yurt #1': { style: 'hut', h: 4.5 },
+  'Mt. Bachelor Gravity Sports Yurt #2': { style: 'hut', h: 4.5 },
 };
 
-// type: 'express' = detachable high-speed quad, 'fixed' = fixed-grip chair
-export const LIFTS = [
-  {
-    id: 'pine-marten',
-    name: 'Pine Marten Express',
-    type: 'express',
-    bottomPx: [360, 442],
-    topPx: [386, 251],
-    bottomFt: 6330,
-    topFt: 7775,
-  },
-  {
-    id: 'summit',
-    name: 'Summit Express',
-    type: 'express',
-    bottomPx: [238, 246],
-    topPx: [318, 88],
-    bottomFt: 7620,
-    topFt: 9000,
-  },
-  {
-    id: 'red',
-    name: 'Red Chair',
-    type: 'fixed',
-    color: '#c8262c',
-    bottomPx: [381, 449],
-    topPx: [402, 311],
-    bottomFt: 6320,
-    topFt: 7050,
-  },
-  {
-    id: 'skyliner',
-    name: 'Skyliner Express',
-    type: 'express',
-    bottomPx: [235, 449],
-    topPx: [318, 256],
-    bottomFt: 6200,
-    topFt: 7640,
-  },
-  {
-    id: 'little-pine',
-    name: 'Little Pine',
-    type: 'fixed',
-    bottomPx: [332, 436],
-    topPx: [304, 391],
-    bottomFt: 6330,
-    topFt: 6560,
-  },
-  {
-    id: 'sunrise',
-    name: 'Sunrise Express',
-    type: 'express',
-    bottomPx: [152, 342],
-    topPx: [230, 230],
-    bottomFt: 6400,
-    topFt: 7400,
-  },
-  {
-    id: 'rainbow',
-    name: 'Rainbow',
-    type: 'fixed',
-    bottomPx: [104, 325],
-    topPx: [180, 240],
-    bottomFt: 6250,
-    topFt: 7080,
-  },
-  {
-    id: 'cloudchaser',
-    name: 'Cloudchaser Express',
-    type: 'express',
-    bottomPx: [19, 270],
-    topPx: [242, 134],
-    bottomFt: 6250,
-    topFt: 8050,
-  },
-  {
-    id: 'outback',
-    name: 'Outback Express',
-    type: 'express',
-    bottomPx: [592, 391],
-    topPx: [405, 239],
-    bottomFt: 5850,
-    topFt: 7700,
-  },
-  {
-    id: 'northwest',
-    name: 'Northwest Express',
-    type: 'express',
-    bottomPx: [703, 360],
-    topPx: [451, 158],
-    bottomFt: 6150,
-    topFt: 8350,
-  },
-];
-
-// Base areas and lodges. `size` is the footprint of the whole complex
-// (width, depth, height in meters); `buildings` are laid out in local meters
-// around the anchor (+z = downhill / north side, -z = uphill / slope side).
-// Styles: hall (main lodge, timber + stone, big windows), aframe (glass
-// gable front), wing, shed, garage (with snowcats), hut.
-export const LODGES = [
-  {
-    id: 'west-village',
-    name: 'West Village Lodge',
-    px: [352, 458],
-    elevFt: 6300,
-    size: [190, 100, 16],
-    yawDeg: 8,
-    buildings: [
-      { style: 'aframe', x: 0, z: 0, w: 54, d: 30, h: 15, deck: -1 },
-      { style: 'wing', x: -44, z: 5, w: 30, d: 22, h: 11 },
-      { style: 'wing', x: 42, z: 7, w: 28, d: 20, h: 10 },
-      { style: 'shed', name: 'Rentals', x: -34, z: 46, w: 24, d: 14, h: 7 },
-      { style: 'shed', name: 'Guest services', x: 30, z: 48, w: 18, d: 12, h: 6 },
-      { style: 'hut', x: 6, z: 42, w: 7, d: 5, h: 4 },
-      { style: 'garage', x: 88, z: 30, w: 30, d: 16, h: 8, yawDeg: 12, snowcats: 3 },
+// Terrain parks, by OpenStreetMap run name. size picks the jump size;
+// mix is the order features appear down the park (jumps run down one lane,
+// rails and boxes down the other, `lane` meters either side of center).
+// Woodward terrain parks, from mtbachelor.com's park guide: size rating, lift
+// and the kinds of features each one is known for. Crews rebuild the parks
+// many times a season, so the exact feature line is a plausible snapshot.
+//
+// `line` is the park top to bottom: each row is a set of features side by
+// side, given as [type, variant, lateral offset in m (+ = right looking
+// downhill)]. Jumps: xs/s/m/l/xl. Rails: flat, down, dfd (down-flat-down),
+// kink, rainbow. Boxes: flat, down, ride-on. 'roof' is a timber A-frame jib.
+export const PARKS = {
+  'Pacific City': {
+    size: 'M/L', lift: 'Skyliner', note: 'First park to open each season',
+    line: [
+      [['rail', 'flat', -8], ['box', 'flat', 0], ['rail', 'down', 8]],
+      [['jump', 'm', -6], ['jump', 'l', 6]],
+      [['battleship', 'm', -7], ['roof', 'a', 0], ['wallride', 'r', 7]],
+      [['jump', 'm', -6], ['jump', 'l', 6]],
+      [['rail', 'dfd', -6], ['box', 'down', 6]],
+      [['jump', 'l', 0]],
+      [['rail', 'kink', -5], ['rail', 'flat', 5]],
     ],
   },
-  {
-    id: 'pine-marten-lodge',
-    name: "Pine Marten Lodge 7,775'",
-    px: [362, 240],
-    elevFt: 7775,
-    size: [150, 90, 17],
-    yawDeg: 0,
-    buildings: [
-      { style: 'aframe', x: 0, z: 0, w: 46, d: 28, h: 17, deck: 1 },
-      { style: 'wing', x: -34, z: -4, w: 24, d: 20, h: 12 },
-      { style: 'hall', name: 'Ski patrol', x: 44, z: -22, w: 16, d: 11, h: 7 },
-      { style: 'shed', name: 'Lift maintenance', x: -46, z: 30, w: 18, d: 11, h: 6 },
-      { style: 'hut', x: 30, z: 30, w: 6, d: 5, h: 4 },
-      { style: 'garage', x: 62, z: 18, w: 22, d: 14, h: 7, yawDeg: -8, snowcats: 2 },
+  'The Point': {
+    size: 'L', lift: 'Skyliner', note: 'Biggest jumps and rails on the mountain',
+    line: [
+      [['rail', 'dfd', -7], ['rail', 'kink', 7]],
+      [['jump', 'l', -6], ['jump', 'xl', 6]],
+      [['jump', 'l', -6], ['jump', 'xl', 6]],
+      [['jump', 'xl', 0]],
+      [['rail', 'rainbow', -6], ['box', 'down', 6]],
     ],
   },
-  {
-    id: 'sunrise-lodge',
-    name: 'Sunrise Lodge',
-    px: [146, 360],
-    elevFt: 6400,
-    size: [150, 90, 13],
-    yawDeg: -25,
-    buildings: [
-      { style: 'hall', x: 0, z: 0, w: 44, d: 24, h: 12, deck: -1 },
-      { style: 'wing', x: 32, z: 4, w: 20, d: 16, h: 9 },
-      { style: 'shed', name: 'Rentals', x: -30, z: 34, w: 16, d: 11, h: 6 },
-      { style: 'garage', x: -62, z: -6, w: 24, d: 14, h: 8, yawDeg: 6, snowcats: 2 },
+  'Canon Beach': {
+    label: 'Cannon Beach', size: 'M/L', lift: 'Skyliner', note: 'Flowy jump lines, rails and boxes',
+    line: [
+      [['box', 'flat', -6], ['rail', 'down', 6]],
+      [['jump', 'm', 0]],
+      [['berm', 'r', 2]],
+      [['jump', 'm', -2]],
+      [['rail', 'flat', -6], ['roof', 'a', 0], ['box', 'down', 6]],
+      [['berm', 'l', -2]],
+      [['jump', 'l', 0]],
+      [['hip', 'r', -4]],
     ],
   },
-  {
-    id: 'nordic',
-    name: 'Nordic Center',
-    px: [430, 478],
-    elevFt: 6280,
-    size: [60, 40, 9],
-    yawDeg: 20,
-    buildings: [
-      { style: 'hall', x: 0, z: 0, w: 26, d: 15, h: 9, deck: -1 },
-      { style: 'shed', name: 'Nordic rentals', x: 22, z: 16, w: 12, d: 9, h: 5 },
-      { style: 'hut', x: -18, z: 14, w: 5, d: 4, h: 3.5 },
+  Seaside: {
+    size: 'M', lift: 'Skyliner', note: 'Medium rails, flowy jumps and hips',
+    line: [
+      [['rail', 'flat', -6], ['box', 'flat', 6]],
+      [['jump', 'm', 0]],
+      [['hip', 'l', 5]],
+      [['rail', 'down', -7], ['roof', 'a', 0], ['rail', 'dfd', 7]],
+      [['jump', 'm', 0]],
+      [['hip', 'r', -5]],
     ],
   },
-  {
-    id: 'summit-hut',
-    name: "Summit 9,065'",
-    px: [348, 72],
-    elevFt: 9065,
-    size: [8, 6, 5],
-    yawDeg: 0,
-    buildings: [],
-  },
-];
-
-// Groomed cross-country loops that leave from the Nordic Center into the
-// flatter forest west of West Village. Each is a closed, wobbly loop:
-// center offset from the Nordic lodge (meters, +x west, +z north), radii,
-// and how much it meanders.
-export const NORDIC_TRAILS = [
-  { name: 'Short loop', dx: 220, dz: 160, rx: 210, rz: 150, wobble: 40, width: 9 },
-  { name: 'Middle loop', dx: 620, dz: 260, rx: 520, rz: 330, wobble: 70, width: 8 },
-  { name: 'Long loop', dx: 1150, dz: 380, rx: 900, rz: 520, wobble: 110, width: 7 },
-];
-
-// Cascade Lakes Highway, running along the bottom of the trail map.
-export const ROADS = [
-  {
-    id: 'cascade-lakes-hwy',
-    width: 11,
-    px: [
-      [0, 356], [60, 380], [120, 405], [180, 432], [235, 462],
-      [290, 492], [340, 515], [400, 535], [440, 544],
+  'Peace Park': {
+    size: 'S/M/L', lift: 'Pine Marten', note: 'Transition, creativity, flow and fun (with Danny Davis)',
+    line: [
+      [['qp', 'up', -7], ['berm', 'r', 6]],
+      [['bus', 'vw', -5], ['log', 'log', 7]],
+      [['roof', 'a', -4], ['roof', 'a', 4]],
+      [['wave', 'r', 2]],
+      [['spine', 's', 0]],
+      [['berm', 'l', -4], ['jump', 's', 7]],
+      [['log', 'log', -6], ['qp', 'up', 6]],
+      [['wave', 'l', -2]],
     ],
   },
-  { id: 'sunrise-access', width: 8, px: [[95, 398], [118, 384], [140, 372]] },
-  { id: 'west-village-access', width: 9, px: [[318, 506], [336, 488], [352, 474]] },
+  'Short Sands': {
+    size: 'S/M', lift: 'Sunrise', note: 'Rails, boxes and small to medium jumps',
+    line: [
+      [['box', 'flat', -5], ['box', 'flat', 5]],
+      [['jump', 's', -5], ['jump', 'm', 5]],
+      [['rail', 'flat', -5], ['box', 'down', 5]],
+      [['jump', 's', -5], ['jump', 'm', 5]],
+      [['rail', 'down', 0]],
+    ],
+  },
+  'Rainbow Adventure Zone': {
+    label: 'Adventure Zone', size: 'XS', lift: 'Rainbow', note: 'Berms, rolls, small hips and banks',
+    line: [
+      [['rollers', 'xs', 0]],
+      [['berm', 'r', 2]],
+      [['hip', 'l', 3, 'xs']],
+      [['berm', 'l', -2]],
+      [['rollers', 'xs', 0]],
+      [['berm', 'r', 2]],
+    ],
+  },
+  'Start Park': {
+    size: 'XS', lift: 'Early Riser', note: 'Snow playground; contours control speed',
+    line: [
+      [['rollers', 'xs', 0]],
+      [['berm', 'l', -1]],
+      [['box', 'ride-on', 0]],
+      [['berm', 'r', 1]],
+      [['rollers', 'xs', 0]],
+    ],
+  },
+  'Progression Park': {
+    size: 'XS/S', lift: 'Little Pine', note: 'Small rollers and banked turns',
+    line: [
+      [['rollers', 'xs', 0]],
+      [['berm', 'r', 2]],
+      [['jump', 'xs', -3], ['box', 'ride-on', 4]],
+      [['berm', 'l', -2]],
+      [['rollers', 'xs', 0]],
+    ],
+  },
+  // Tree runs with natural whoops (Woodward "Adventure Zones").
+  'Dilly Dally Alley': { kind: 'whoops' },
+  'Enchanted Forest': { kind: 'whoops' },
+  // 13' mini pipe under Pine Marten in West Village.
+  Halfpipe: { kind: 'pipe', label: 'Half Pipe', size: 'M', lift: 'Pine Marten', wall: 13 },
+};
+
+// Woodward parks not in OpenStreetMap: laid out beside their lift line.
+export const EXTRA_PARKS = [
+  { name: 'Start Park', lift: 'early-riser', offset: 32, from: 0.08, to: 0.92, width: 30 },
+  { name: 'Progression Park', lift: 'little-pine', offset: 34, from: 0.06, to: 0.94, width: 30 },
 ];
 
-export const PARKING = [
-  { id: 'west-village-lot', px: [372, 486], size: [260, 110], yawDeg: 22 },
-  { id: 'west-village-lot-2', px: [300, 472], size: [150, 70], yawDeg: 28 },
-  { id: 'sunrise-lot', px: [120, 372], size: [170, 80], yawDeg: 24 },
-];
+// Race courses on Cliffhanger, top to bottom (fractions of its length): a GS
+// on the skier's left and a slalom on the right, side by side, inside one
+// B-net corridor with a shared start and finish. Lanes and offsets are
+// meters from the run's centerline (+ = right looking downhill).
+export const RACE = {
+  run: 'Cliffhanger',
+  from: 0.03,
+  to: 0.96,
+  fence: 21,
+  gs: { lane: -8, gateSpacing: 27, offset: 5.5 },
+  // Slalom: single poles, tighter rhythm, with the odd hairpin and flush.
+  slalom: { lane: 9, gateSpacing: 11, offset: 2.6, combos: 9 },
+};
 
-// Landforms that are not part of the main volcanic cone.
-export const FEATURES = [
-  // Small cinder cone west of West Village ("The Cone" on the map).
-  { id: 'cinder-cone', px: [425, 388], elevFt: 6500, height: 55, radius: 210, crater: true },
-  // Tumalo Mountain, the forested peak across the highway (bottom-left of map).
-  { id: 'tumalo', px: [40, 472], elevFt: 6200, height: 330, radius: 1150, crater: false },
+// Named high points for labels; snapped to the highest ground within
+// `search` meters.
+export const LANDMARKS = [{ name: 'Tumalo Mountain', at: [-3680, 2880], search: 300 }];
+
+// Where each lift's terminals sit on the painted trail map (pixels), used to
+// fit the trail-map overlay to the real world.
+export const TRAIL_MAP_TIES = [
+  { lift: 'pine-marten', bottomPx: [360, 442], topPx: [386, 251] },
+  { lift: 'summit', bottomPx: [238, 246], topPx: [318, 88] },
+  { lift: 'red', bottomPx: [381, 449], topPx: [402, 311] },
+  { lift: 'skyliner', bottomPx: [235, 449], topPx: [318, 256] },
+  { lift: 'little-pine', bottomPx: [332, 436], topPx: [304, 391] },
+  { lift: 'sunrise', bottomPx: [152, 342], topPx: [230, 230] },
+  { lift: 'rainbow', bottomPx: [104, 325], topPx: [180, 240] },
+  { lift: 'cloudchaser', bottomPx: [19, 270], topPx: [242, 134] },
+  { lift: 'outback', bottomPx: [592, 391], topPx: [405, 239] },
+  { lift: 'northwest', bottomPx: [703, 360], topPx: [451, 158] },
 ];
 
 // Surrounding Cascade peaks, placed by real latitude/longitude relative to
@@ -274,4 +291,4 @@ export const LAKES = [
   { name: 'Crane Prairie Reservoir', x: 2000, z: -20500, size: [5200, 3000], yawDeg: 0, elevFt: 4450 },
 ];
 
-export const TREELINE_M = 2400; // about 7,875 ft
+export const TREELINE_M = 2380; // about 7,800 ft: open snow above Pine Marten Lodge
