@@ -242,7 +242,7 @@ export function createSkierModel({ jacket = 0xffc20e, trim = 0x131416, pants = 0
   mesh(shellGeo, M.jacket, spine);
   // Collar and the hood bunched behind the neck.
   mesh(new THREE.CylinderGeometry(0.085, 0.1, 0.11, 16, 1, true), M.trim, spine, 0, TORSO + 0.02, 0.005).material = M.trim;
-  mesh(new THREE.SphereGeometry(0.1, 14, 10).scale(1.3, 0.6, 0.7), M.sleeve, spine, 0, TORSO - 0.02, -0.11);
+  mesh(new THREE.TorusGeometry(0.085, 0.03, 8, 16, Math.PI).rotateX(Math.PI / 2 + 0.25), M.trim, spine, 0, TORSO - 0.01, -0.02);
   const neck = joint(spine, 0, TORSO + 0.03, 0.01);
   const head = new THREE.Group();
   neck.add(head);
@@ -345,6 +345,7 @@ export function createSkierModel({ jacket = 0xffc20e, trim = 0x131416, pants = 0
   const dir = v3();
   const hipPos = v3();
   const off = v3();
+  const grabTgt = v3();
 
   // Hip offset above a foot for shin tilt s and thigh angle a (from vertical,
   // negative = hip behind the knee).
@@ -356,43 +357,81 @@ export function createSkierModel({ jacket = 0xffc20e, trim = 0x131416, pants = 0
     Object.assign(p, next);
     const seated = p.seated > 0.5;
     const crouch = Math.min(1, p.crouch + 0.6 * p.tuck);
-    // Leg angles.
-    let s;
-    let a;
+    const grabbing = !seated && p.grab > 0;
+    const gSide = grabHand(p.grabType);
+    const [gx, gz] = grabPoint(p.grabType, gSide);
+    const gLeg = gx < 0 ? 0 : 1;
+    const tail = p.grabType === 'tail';
+    // Leg angles: shin tilt s and thigh angle a (see legOffset).
+    let s0;
+    let a0;
     if (seated) {
-      s = 0.05;
-      a = -1.5;
+      s0 = 0.05;
+      a0 = -1.5;
     } else {
       const bend = 0.35 + 1.25 * crouch;
-      s = 0.55 * bend;
-      a = s - bend;
+      s0 = 0.55 * bend;
+      a0 = s0 - bend;
       const fold = Math.min(1, p.fold + 0.8 * p.grab);
-      s += (0.85 - s) * fold;
-      a += (-1.65 - a) * fold;
+      s0 += (0.85 - s0) * fold;
+      a0 += (-1.65 - a0) * fold;
     }
-    legOffset(s, a, off);
+    legOffset(s0, a0, off);
     // Hips: planted feet put them at `off`; in the air they sit at HIP_AIR.
     const airK = seated ? 1 : p.air;
     if (seated) hipPos.set(0, ANKLE_Y + SHIN, -THIGH);
     else hipPos.set(0, off.y + (HIP_AIR - off.y) * airK, off.z * (1 - airK));
     hips.position.copy(hipPos);
-    for (const L of legs) {
-      L.foot.position.set(L.side * STANCE, hipPos.y - off.y, hipPos.z - off.z);
-      L.foot.rotation.set(seated ? 0.35 : 0, 0, 0);
-      L.ankle.rotation.set(s, 0, -p.lean * 0.18);
-      L.knee.rotation.set(a - s, 0, 0);
-    }
 
-    // Spine: forward lean, angulation against the turn, twist.
-    if (seated) spine.rotation.set(-0.12, 0, 0);
-    else {
-      const fwd = 0.28 + 0.35 * crouch + 0.5 * p.tuck + 0.55 * Math.min(1, p.fold + p.grab) + 0.15 * p.press;
-      spine.rotation.set(fwd, p.twist * 0.6, p.lean * 0.45);
+    // Body shape. For a grab this is solved below: the grabbed leg is pulled
+    // up to the hand first (knee to the chest, or the foot kicked back for a
+    // tail grab), and only then does the back bend (or straighten) to close
+    // the gap, so the skier stays as upright as the grab allows.
+    const fwd0 = seated ? -0.12 : 0.28 + 0.35 * crouch + 0.5 * p.tuck + 0.45 * Math.min(1, p.fold) + 0.15 * p.press;
+    const gTwist = grabbing ? p.grab * (p.grabType === 'mute' ? 0.4 : tail ? 0.45 : -0.15) : 0;
+    const tweak = grabbing ? grabTweak(p.grabType) * p.grab : 0;
+    function shape(pull, fwd) {
+      for (let i = 0; i < 2; i++) {
+        const L = legs[i];
+        let s = s0;
+        let a = a0;
+        if (grabbing && i === gLeg && pull > 0) {
+          const k = pull * p.grab;
+          s += ((tail ? 1.5 : 1.35) - s) * k;
+          a += ((tail ? -1.45 : -1.95) - a) * k;
+        }
+        legOffset(s, a, off);
+        L.foot.position.set(L.side * STANCE, hipPos.y - off.y, hipPos.z - off.z);
+        L.foot.rotation.set(seated ? 0.35 : tweak, 0, 0);
+        L.ankle.rotation.set(s, 0, -p.lean * 0.18);
+        L.knee.rotation.set(a - s, 0, 0);
+      }
+      if (seated) spine.rotation.set(fwd, 0, 0);
+      else spine.rotation.set(fwd, p.twist * 0.6 + gTwist, p.lean * 0.45);
+      root.updateMatrixWorld(true);
     }
-    neck.rotation.set(-spine.rotation.x * 0.75 + (seated ? 0.1 : 0), p.look + p.twist * 0.3, -spine.rotation.z * 0.5);
+    const gArm = arms.find((A) => A.side === gSide);
+    function grabTarget() {
+      // A point beside the ski's edge, in the ski's own frame so a tweaked
+      // ski carries the hand with it; returned in the spine's frame.
+      const L = legs[gLeg];
+      grabTgt.set((gx < 0 ? -1 : 1) * 0.075, 0.1, gz + 0.04);
+      L.foot.localToWorld(grabTgt);
+      spine.worldToLocal(grabTgt);
+      return grabTgt.distanceTo(gArm.shoulder.position) <= (UPPER_ARM + FOREARM) * 0.97;
+    }
+    let pull = 0;
+    let fwd = grabbing ? (tail ? fwd0 * (1 - 0.4 * p.grab) : fwd0 + 0.2 * p.grab) : fwd0;
+    shape(pull, fwd);
+    if (grabbing) {
+      for (let k = 0; k < 14 && !grabTarget(); k++) {
+        if (pull < 1) pull = Math.min(1, pull + 0.2);
+        else fwd = tail ? Math.max(0.05, fwd - 0.08) : fwd + 0.07;
+        shape(pull, fwd);
+      }
+    }
 
     // Arms by hand targets in the spine's frame.
-    root.updateMatrixWorld(true);
     for (const A of arms) {
       const sd = A.side;
       let plant = sd > 0 ? p.plantL : p.plantR;
@@ -410,23 +449,14 @@ export function createSkierModel({ jacket = 0xffc20e, trim = 0x131416, pants = 0
           tgt.lerp(tw.set(sd * (0.45 + 0.2 * Math.sin(ph)), 0.35 + 0.25 * Math.cos(ph), 0.15 * Math.sin(ph * 0.7)), p.wobble);
         }
       }
-      // Grabs: the grabbing hand goes to a point on a ski (root frame).
-      const grabbing = !seated && p.grab > 0 && grabHand(p.grabType) === sd;
-      if (grabbing) {
-        const [gx, gz] = grabPoint(p.grabType, sd);
-        const L = legs[gx < 0 ? 0 : 1];
-        tw.set(L.foot.position.x + (gx < 0 ? -0.03 : 0.03), L.foot.position.y + 0.05, L.foot.position.z + gz);
-        root.localToWorld(tw);
-        spine.worldToLocal(tw);
-        tgt.lerp(tw, p.grab);
-      } else if (!seated && p.grab > 0) {
-        // The free arm goes out for balance.
-        tgt.lerp(tw.set(sd * 0.55, 0.42, -0.05), p.grab);
-      }
+      if (grabbing && sd === gSide) tgt.lerp(grabTgt, p.grab);
+      else if (grabbing) tgt.lerp(tw.set(sd * 0.6, 0.38, tail ? 0.2 : -0.08), p.grab); // free arm out for balance
       // Elbows point out and back.
       poleV.set(sd * 0.8, -0.3, -0.6);
       reach(A, tgt, poleV);
     }
+    // Head up, eyes on the landing, after any extra bend for a grab.
+    neck.rotation.set(-spine.rotation.x * 0.75 + (seated ? 0.1 : 0), p.look + p.twist * 0.3, -spine.rotation.z * 0.5);
     // Poles trail back and down; a plant swings the tip forward to the snow.
     root.updateMatrixWorld(true);
     for (const A of arms) {
@@ -436,8 +466,14 @@ export function createSkierModel({ jacket = 0xffc20e, trim = 0x131416, pants = 0
       else if (p.tuck > 0.5) dir.set(sd * 0.1, -0.25, -1);
       else dir.set(sd * 0.15, -1, -0.65).lerp(tw.set(sd * 0.2, -1, 0.35), plant);
       if (p.airArms > 0 && !seated) dir.lerp(tw.set(sd * 0.4, -1, -0.4), p.airArms * 0.5);
+      // While grabbing, both poles swing back out of the way, along the ski.
+      if (grabbing) dir.lerp(tw.set(sd * 0.35, -0.35, -1), p.grab);
       aimPole(A, dir);
     }
+  }
+  // Ski pitch for each grab (nose down): japan and tail grabs pull the tails up behind.
+  function grabTweak(type) {
+    return type === 'japan' ? 0.4 : type === 'tail' ? 0.6 : type === 'mute' ? 0.15 : 0;
   }
   function grabHand(type) {
     return type === 'tail' ? 1 : -1;
@@ -450,12 +486,12 @@ export function createSkierModel({ jacket = 0xffc20e, trim = 0x131416, pants = 0
       case 'japan':
         return [side, 0.3];
       case 'tail':
-        return [side, -0.4];
+        return [side, -0.32];
       default:
         return [-side, 0.22]; // mute: across to the other ski, in front of the boot
     }
   }
 
   pose({});
-  return { root, pose, params: p };
+  return { root, pose, params: p, rig: { arms, legs, spine } };
 }
