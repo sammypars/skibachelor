@@ -20,6 +20,7 @@ const STANCE = 0.12; // half the gap between the feet
 export const HIP_AIR = 0.9; // hip height above the feet when standing tall
 
 const v3 = () => new THREE.Vector3();
+const X_AXIS = new THREE.Vector3(1, 0, 0);
 
 function canvasTex(w, h, draw, srgb = true) {
   const c = document.createElement('canvas');
@@ -335,9 +336,10 @@ export function createSkierModel({ jacket = 0xffc20e, trim = 0x131416, pants = 0
   //   plantL/R pole plants
   //   wobble   arms flailing on a sketchy landing
   //   t        clock for the flail
+  //   fallen   lying in the snow after a crash: legs long, arms flung out
   const p = {
     crouch: 0.25, tuck: 0, fold: 0, air: 0, grab: 0, grabType: 'mute', airArms: 0, seated: 0,
-    lean: 0, twist: 0, look: 0, plantL: 0, plantR: 0, wobble: 0, t: 0, press: 0,
+    lean: 0, twist: 0, look: 0, plantL: 0, plantR: 0, wobble: 0, t: 0, press: 0, fallen: 0,
   };
   const tgt = v3();
   const tw = v3();
@@ -375,6 +377,11 @@ export function createSkierModel({ jacket = 0xffc20e, trim = 0x131416, pants = 0
       const fold = Math.min(1, p.fold + 0.8 * p.grab);
       s0 += (0.85 - s0) * fold;
       a0 += (-1.65 - a0) * fold;
+      if (p.fallen > 0) {
+        // Lying back with the knees up and the skis flat on the snow.
+        s0 += (0.2 - s0) * p.fallen;
+        a0 += (-2.1 - a0) * p.fallen;
+      }
     }
     legOffset(s0, a0, off);
     // Hips: planted feet put them at `off`; in the air they sit at HIP_AIR.
@@ -387,7 +394,7 @@ export function createSkierModel({ jacket = 0xffc20e, trim = 0x131416, pants = 0
     // up to the hand first (knee to the chest, or the foot kicked back for a
     // tail grab), and only then does the back bend (or straighten) to close
     // the gap, so the skier stays as upright as the grab allows.
-    const fwd0 = seated ? -0.12 : 0.28 + 0.35 * crouch + 0.5 * p.tuck + 0.45 * Math.min(1, p.fold) + 0.15 * p.press;
+    const fwd0 = seated ? -0.12 : (1 - p.fallen) * 0.28 + 0.35 * crouch + 0.5 * p.tuck + 0.45 * Math.min(1, p.fold) + 0.15 * p.press;
     const gTwist = grabbing ? p.grab * (p.grabType === 'mute' ? 0.4 : tail ? 0.45 : -0.15) : 0;
     const tweak = grabbing ? grabTweak(p.grabType) * p.grab : 0;
     function shape(pull, fwd) {
@@ -401,9 +408,13 @@ export function createSkierModel({ jacket = 0xffc20e, trim = 0x131416, pants = 0
           a += ((tail ? -1.45 : -1.95) - a) * k;
         }
         legOffset(s, a, off);
-        L.foot.position.set(L.side * STANCE, hipPos.y - off.y, hipPos.z - off.z);
-        L.foot.rotation.set(seated ? 0.35 : tweak, 0, 0);
-        L.ankle.rotation.set(s, 0, -p.lean * 0.18);
+        // A pitched foot (tweaked ski, or flat on the snow after a fall)
+        // carries the whole leg with it, so turn the offset the same way.
+        const pitch = seated ? 0.35 : tweak + 1.4 * p.fallen;
+        if (!seated) off.applyAxisAngle(X_AXIS, pitch);
+        L.foot.position.set(L.side * (STANCE + 0.12 * p.fallen), hipPos.y - off.y, hipPos.z - off.z);
+        L.foot.rotation.set(pitch, 0, 0);
+        L.ankle.rotation.set(s, 0, -p.lean * 0.18 + L.side * 0.2 * p.fallen);
         L.knee.rotation.set(a - s, 0, 0);
       }
       if (seated) spine.rotation.set(fwd, 0, 0);
@@ -444,6 +455,7 @@ export function createSkierModel({ jacket = 0xffc20e, trim = 0x131416, pants = 0
         if (p.tuck > 0) tgt.lerp(tw.set(sd * 0.13, 0.22, 0.42), p.tuck);
         if (plant > 0) tgt.lerp(tw.set(sd * 0.32, 0.12, 0.44), plant);
         if (p.airArms > 0) tgt.lerp(tw.set(sd * 0.6, 0.4, 0.12), p.airArms);
+        if (p.fallen > 0) tgt.lerp(tw.set(sd * 0.62, 0.42, 0.06), p.fallen);
         if (p.wobble > 0) {
           const ph = p.t * 13 + sd * 1.7;
           tgt.lerp(tw.set(sd * (0.45 + 0.2 * Math.sin(ph)), 0.35 + 0.25 * Math.cos(ph), 0.15 * Math.sin(ph * 0.7)), p.wobble);
@@ -493,5 +505,9 @@ export function createSkierModel({ jacket = 0xffc20e, trim = 0x131416, pants = 0
   }
 
   pose({});
-  return { root, pose, params: p, rig: { arms, legs, spine } };
+  // Skis on or off the boots (they come off in a big crash).
+  function setSkis(on) {
+    for (const L of legs) L.ski.visible = on;
+  }
+  return { root, pose, params: p, setSkis, rig: { arms, legs, spine } };
 }
