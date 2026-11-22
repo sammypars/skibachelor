@@ -4,6 +4,9 @@
 //   terrain.bin / terrain.json  Elevation grid over the map extent, from the
 //                               AWS Terrain Tiles open dataset (Terrarium PNGs,
 //                               USGS 3DEP 10 m in the US).
+//                               The shipped grid is then sharpened from
+//                               lidar by tools/bake-lidar.py (npm run lidar),
+//                               so rerun that after baking terrain here.
 //   osm.json                    Lifts, runs, buildings, parking, roads, lakes
 //                               and peaks from OpenStreetMap (ODbL,
 //                               (c) OpenStreetMap contributors), already in

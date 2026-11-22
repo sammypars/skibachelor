@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "python3 -m http.server 5174",
     "check": "node tools/check-world.js",
-    "geo": "node tools/fetch-geo.mjs"
+    "geo": "node tools/fetch-geo.mjs",
+    "lidar": ".venv/bin/python tools/bake-lidar.py"
   }
 }

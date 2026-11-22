@@ -17,7 +17,10 @@ export const GEO = {
     minX: -5200, // east edge (world +x is west)
     minZ: -3800, // south edge
     size: 10400,
-    n: 705, // grid points per side, ~14.8 m apart
+    // Grid points per side, 7.5 m apart: bare-earth lidar (2009-2011 Oregon
+    // Lidar Consortium, Deschutes; via NOAA Digital Coast), baked by
+    // tools/bake-lidar.py.
+    n: 1388,
     offset: 1000, // stored as uint16: h = offset + value * step
     step: 0.05,
   },
