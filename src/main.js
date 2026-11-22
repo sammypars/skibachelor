@@ -4,6 +4,8 @@ import { buildWorld } from './world/world.js';
 import { loadGeo } from './world/geo.js';
 import { createDrone } from './drone.js';
 import { createSki } from './ski.js';
+import { createRiderPanel, keyHelpHTML } from './rider-panel.js';
+import { onSettings } from './settings.js';
 import { TRAIL_MAP } from './data/mountain.js';
 import { buildTerrain, buildSurroundings } from './render/terrain.js';
 import { buildForest } from './render/trees.js';
@@ -250,6 +252,18 @@ const ski = createSki({
   hud: $('#ski-hud'),
   envMap,
 });
+// Rider panel: dress the skier and remap the keys. The game holds still
+// while it's open.
+const riderPanel = createRiderPanel({
+  onOpen: () => (ski.paused = true),
+  onClose: () => (ski.paused = false),
+});
+$('#rider-open').addEventListener('click', () => riderPanel.open());
+$('#ski-hud .ski-rider').addEventListener('click', () => riderPanel.open());
+const skiHelp = $('#ski-hud .ski-help');
+const syncHelp = () => (skiHelp.innerHTML = keyHelpHTML());
+onSettings(syncHelp);
+syncHelp();
 const skiButton = $('#ski-toggle');
 const startHeading = (run) => {
   const a = run.pts[0];

@@ -39,6 +39,7 @@ import { createSkierModel } from './skier-model.js';
 import { createSnowSpray, createSkiTracks } from './ski-fx.js';
 import { createSkiAudio } from './ski-audio.js';
 import { HANGER } from './render/lifts.js';
+import { codeMap, getLook, onSettings } from './settings.js';
 
 const G = 9.81;
 const MASS = 80; // kg, rider and kit
@@ -57,11 +58,18 @@ const EDGE_RATE = 3.2; // how fast the skis roll onto edge (1/s): tap for a gent
 const PIVOT_RATE = 2.3; // steering the skis round at low speed (rad/s)
 const BUTTER_RATE = 4.4;
 const COM = 0.9; // centre of mass above the feet (m)
-const SPIN_RATE = 2 * Math.PI * 1.3; // rad/s, a fast spin
-const FLIP_RATE = 2 * Math.PI * 1.15;
-const SPIN_TORQUE = 9; // rad/s^2 the arms can add in the air
-const FLIP_TORQUE = 8;
-const SPOT = 6; // rad/s^2 opening or closing up to spot the landing
+// Rotation in the air is angular momentum L = I * w, set at takeoff and
+// conserved: the body can only change how fast it turns by changing shape
+// (inertia I relative to standing). Tucked tight it turns faster, arms out
+// slower.
+const SPIN_POP = 4.6; // rad/s of spin a full wind-up throws (a flat pop gets you round about 270)
+const FLIP_POP = 7.2; // rad/s of flip a full pop throws
+const I_TUCK = 0.85; // knees up, arms in
+const I_SPOT = 0.95; // spotting is mostly opening up: it can't add much
+const I_GRAB = 0.85;
+const I_OPEN = 1.6; // arms and legs spread
+const ARM_TORQUE = 1.4; // rad/s^2: with no wind-up, arms can start a lazy turn
+const ARM_MAX = 1.1;
 const SUBSTEPS = 4;
 const LIFT_REACH = 28; // how close to a bottom terminal to board (m)
 
@@ -73,6 +81,7 @@ const smooth = (a, b, x) => {
 };
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const GRAB_NAMES = { mute: 'Mute', safety: 'Safety', japan: 'Japan', tail: 'Tail' };
+const grabList = (grabs) => grabs.map((g) => GRAB_NAMES[g]).join(' to ');
 
 export function createSki({ scene, camera, world, surfaceAt, treeNear, grindables = [], lifts, hud, envMap = null }) {
   const keys = new Set();
@@ -80,10 +89,25 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
   const held = (...names) => names.some((n) => keys.has(n) || touch.has(n));
 
   // --- The rider, the spray, the tracks and the sound.
-  const model = createSkierModel({ envMap });
+  let model = createSkierModel({ look: getLook(), envMap });
   const pivot = new THREE.Group(); // rotates about the centre of mass
   model.root.position.y = -COM;
   pivot.add(model.root);
+  // A new look from the Rider panel: rebuild the rider in place.
+  let lookKey = JSON.stringify(getLook());
+  onSettings(() => {
+    const k = JSON.stringify(getLook());
+    if (k === lookKey) return;
+    lookKey = k;
+    const old = model;
+    model = createSkierModel({ look: getLook(), envMap });
+    model.root.position.y = -COM;
+    pivot.remove(old.root);
+    pivot.add(model.root);
+    old.dispose();
+    if (loose.length) model.setSkis(false);
+  });
+  let paused = false;
   pivot.visible = false;
   scene.add(pivot);
   const spray = createSnowSpray(scene);
@@ -135,7 +159,9 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
   let lean = 0;
   let braking = 0;
   let brakeSide = 1;
-  let press = 0; // nose press for butters
+  let press = 0; // nose (+) or tail (-) press for butters
+  let butterType = 'Nose';
+  let butterFinish = 0; // radians left to swing round after a butter
   let butterSpin = 0;
   let slip = 0; // sideways skid speed (m/s)
   let nForce = G; // what the snow pushes back with, per kg (m/s^2)
@@ -162,24 +188,27 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
   }
 
   // --- Input.
-  const CODES = {
-    KeyA: 'left', ArrowLeft: 'left', KeyD: 'right', ArrowRight: 'right',
-    KeyW: 'up', ArrowUp: 'up', KeyS: 'down', ArrowDown: 'down',
-    Space: 'pop', ShiftLeft: 'grab', ShiftRight: 'grab',
-  };
+  // Keys come from the player's bindings (remappable in the Rider panel).
+  const HELD = new Set(['left', 'right', 'up', 'down', 'pop', 'grab']);
+  let CODES = codeMap();
+  onSettings(() => {
+    CODES = codeMap();
+    keys.clear();
+  });
   function onKey(e, down) {
-    if (!active) return;
-    if (e.target.tagName === 'INPUT') return;
+    if (!active || paused) return;
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
     const k = CODES[e.code];
-    if (k) {
-      e.preventDefault();
+    if (!k) return;
+    e.preventDefault();
+    if (HELD.has(k)) {
       if (down) keys.add(k);
       else keys.delete(k);
     }
-    if (!down) return;
-    if (e.code === 'KeyR') respawn();
-    if (e.code === 'KeyM') toast(audio.toggleMute() ? 'Sound off' : 'Sound on', '');
-    if (e.code === 'KeyE') {
+    if (!down || e.repeat) return;
+    if (k === 'reset') respawn();
+    if (k === 'sound') toast(audio.toggleMute() ? 'Sound off' : 'Sound on', '');
+    if (k === 'lift') {
       if (chair) skipLift();
       else if (nearLift) boardLift(nearLift);
     }
@@ -226,7 +255,7 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
     clearLoose();
     spinVel = flipVel = 0;
     yawRate = edge = lean = 0;
-    braking = press = butterSpin = slip = 0;
+    braking = press = butterSpin = butterFinish = slip = 0;
     nForce = G;
     gLoad = 1;
     wobble = airBlend = 0;
@@ -304,24 +333,25 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
     toastEl.classList.add('show');
     toastTimer = 2.2;
   }
-  function trickName(spin, flip, grab, opts = {}) {
+  function trickName(spin, flip, grabs, opts = {}) {
     const deg = Math.round(Math.abs(spin) / Math.PI) * 180;
     const flips = Math.round(Math.abs(flip) / (2 * Math.PI));
     const back = flip < 0;
     const mult = flips > 2 ? 'Triple ' : flips > 1 ? 'Double ' : '';
     const parts = [];
+    if (opts.butter && deg >= 180) parts.push(`${opts.butter} butter`);
     if (opts.switchTakeoff && (deg || flips)) parts.push('Switch');
     if (flips && deg >= 180) parts.push(`${mult}${back ? 'Cork' : 'Misty'} ${deg}`);
     else if (flips) parts.push(`${mult}${back ? 'Backflip' : 'Frontflip'}`);
     else if (deg >= 180) parts.push(`${deg}`);
-    if (grab) parts.push(parts.length ? GRAB_NAMES[grab] : `${GRAB_NAMES[grab]} Grab`);
+    if (grabs.length) parts.push(parts.length || grabs.length > 1 ? grabList(grabs) : `${grabList(grabs)} Grab`);
     return parts.join(' ') || null;
   }
-  function trickPoints(spin, flip, grab, switchTakeoff) {
+  function trickPoints(spin, flip, grabs, switchTakeoff) {
     const turns = Math.round(Math.abs(spin) / Math.PI) / 2;
     const flips = Math.round(Math.abs(flip) / (2 * Math.PI));
     let p = Math.round(2000 * Math.pow(turns, 2)) + flips * 3000;
-    if (grab) p = Math.round(p * 1.25) + 250;
+    if (grabs.length) p = Math.round((p * 1.25 + 250 * grabs.length) * (1 + 0.3 * (grabs.length - 1)));
     if (switchTakeoff) p = Math.round(p * 1.3);
     return p;
   }
@@ -339,11 +369,15 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
 
     const speed = vel.length();
     const steer = (held('left') ? 1 : 0) - (held('right') ? 1 : 0);
+    // Butter: Shift presses the nose (with S, the tail) and A / D pivot the
+    // skis round on it. Quicker when you're moving; let go and the skis
+    // swing on round to the nearest 180.
     const butter = held('grab') && speed < 20 && !loading;
+    if (butter) butterType = held('down') ? 'Tail' : 'Nose';
     const brake = held('down') && !loading && !butter && speed > 0.6;
     const tuck = held('up') && !butter;
     braking += ((brake ? 1 : 0) - braking) * Math.min(1, dt * 6);
-    press += ((butter ? 1 : 0) - press) * Math.min(1, dt * 8);
+    press += ((butter ? (butterType === 'Tail' ? -1 : 1) : 0) - press) * Math.min(1, dt * 8);
     const sw = vel.dot(f) < -0.3; // riding switch
 
     // Roll onto the edges (or flatten them for a butter).
@@ -358,8 +392,18 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
     // Yaw: carve, pivot, butter or swing into a hockey stop.
     let w;
     if (butter) {
-      w = steer * BUTTER_RATE;
+      butterFinish = 0;
+      w = steer * BUTTER_RATE * (0.55 + 0.45 * smooth(0.5, 6, speed));
       butterSpin += w * dt;
+    } else if (butterFinish) {
+      const step = Math.sign(butterFinish) * BUTTER_RATE * 0.8 * dt;
+      if (Math.abs(step) >= Math.abs(butterFinish)) {
+        w = butterFinish / dt;
+        butterFinish = 0;
+      } else {
+        w = step / dt;
+        butterFinish -= step;
+      }
     } else if (brake) {
       if (braking < 0.2 && steer) brakeSide = steer;
       const target = travelHeading(sw) + brakeSide * 1.3;
@@ -372,7 +416,9 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
       const muMax = MU_LAT_HOLD + (MU_LAT_EDGE - MU_LAT_HOLD) * smooth(0.05, 0.6, ae);
       const R = Math.max(SIDECUT_R * Math.cos(ae), (speed * speed) / (muMax * Math.max(1, nForce)) * 0.88);
       const carve = (Math.abs(vel.dot(f)) / R) * Math.sign(edge) * smooth(0.04, 0.4, ae);
-      const pivotW = steer * PIVOT_RATE * (1 - smooth(3, 12, speed));
+      // (Holding a direction while loading a pop winds up the spin; it
+      // doesn't pivot the skis.)
+      const pivotW = loading ? 0 : steer * PIVOT_RATE * (1 - smooth(3, 12, speed));
       w = Math.abs(pivotW) > Math.abs(carve) ? pivotW : carve;
       // Skis can't swing far past the travel unless pivoting slowly.
       if (speed > 3) {
@@ -468,13 +514,18 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
     }
   }
 
-  function endButter() {
-    const deg = Math.round(Math.abs(butterSpin) / Math.PI) * 180;
-    if (deg >= 180) {
-      const nose = true;
+  function endButter(popped = false) {
+    // Swing on round to the nearest 180 (if it's close) so you ride away
+    // forwards or switch.
+    const k = butterSpin / Math.PI;
+    const ahead = (Math.sign(butterSpin) > 0 ? Math.ceil(k) : Math.floor(k)) * Math.PI;
+    const rest = ahead - butterSpin;
+    if (!popped && Math.abs(rest) < 0.9) butterFinish = rest;
+    const deg = Math.round(Math.abs(popped ? butterSpin : ahead) / Math.PI) * 180;
+    if (deg >= 180 && !popped) {
       const pts = Math.round(deg * 2.2);
       score += pts;
-      toast(`${nose ? 'Nose' : 'Tail'} butter ${deg}`, `+${pts.toLocaleString()}`);
+      toast(`${butterType} butter ${deg}`, `+${pts.toLocaleString()}`);
     }
     butterSpin = 0;
   }
@@ -502,7 +553,8 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
     loading = false;
     load = 0;
     trackBreak = true;
-    if (Math.abs(butterSpin) > 0.2) endButter();
+    const wasButter = Math.abs(butterSpin) > 0.6 ? butterType : null;
+    if (Math.abs(butterSpin) > 0.2) endButter(true);
     // Air orientation as heading / pitch / roll (Y-X-Z): spins turn the
     // heading about the vertical, flips turn the pitch about the body's
     // sideways axis. Off the lip the body starts tipped with the ramp and
@@ -517,12 +569,14 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
     // direction held on the pop throws more.
     const steer = (held('left') ? 1 : 0) - (held('right') ? 1 : 0);
     const flipIn = (held('up') ? 1 : 0) - (held('down') ? 1 : 0);
-    const power = 0.45 + 0.55 * charge;
-    const Ls = THREE.MathUtils.clamp(yawRate * 0.8 + steer * SPIN_RATE * power, -SPIN_RATE * 1.35, SPIN_RATE * 1.35);
-    const Lf = flipIn * FLIP_RATE * (0.5 + 0.5 * charge);
+    // A quick tap barely turns you; a full wind-up throws SPIN_POP.
+    const power = 0.25 + 0.75 * charge;
+    const Ls = THREE.MathUtils.clamp(yawRate * 0.5 + steer * SPIN_POP * power, -SPIN_POP * 1.15, SPIN_POP * 1.15);
+    const Lf = flipIn * FLIP_POP * (0.45 + 0.55 * charge);
     air = {
-      spin: 0, flip: 0, grab: null, grabT: 0, t: 0, charge, heading, heading0: heading, pitch: 0,
-      tilt: rampPitch, roll: lean, Ls, Lf, tl: timeToLand(), tlAge: 0, switchTakeoff,
+      spin: 0, flip: 0, grab: null, grabs: [], pending: null, pendT: 0, grabT: 0, t: 0, charge, heading, heading0: heading, pitch: 0,
+      tilt: rampPitch, roll: lean, Ls, Lf, Is: 1, If: 1, tl: timeToLand(), tlAge: 0, switchTakeoff,
+      butter: wasButter,
     };
     spinVel = Ls;
     flipVel = Lf;
@@ -537,26 +591,47 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
     quat.setFromEuler(euler);
   }
 
-  // Rotate one axis in the air: arms add torque while held; let go and the
-  // body opens or closes to finish on the next whole `unit` at touchdown.
-  function rotate(L, angle, input, torque, max, unit, I, dt) {
-    if (input) {
-      const same = Math.sign(input) === Math.sign(L) || Math.abs(L) < 0.3;
-      L += input * torque * dt * (same ? 1 : 0.5);
-      L = THREE.MathUtils.clamp(L, -max, max);
-    } else if (Math.abs(L) > 0.02 || Math.abs(angle) > 0.02) {
-      const dir = Math.sign(L) || Math.sign(angle) || 1;
-      const k = angle / unit;
-      let target = (dir > 0 ? Math.ceil(k - 0.1) : Math.floor(k + 0.1)) * unit;
-      if (Math.abs(target - angle) < 0.015 && air.tl > 0.1) return { L: 0, angle: target };
-      const need = (target - angle) / Math.max(0.1, air.tl);
-      const step = SPOT * dt * (1 + 0.5 * Math.abs(need) / (Math.abs(L) + 1));
-      L += THREE.MathUtils.clamp(need * I - L, -step, step);
-      // Arriving: stop exactly on it.
-      const next = angle + (L / I) * dt;
-      if ((target - angle) * (target - next) <= 0) return { L: 0, angle: target };
+  // Rotate one axis in the air. L is fixed from takeoff; the body only
+  // changes shape. Holding the way you're turning tucks you up (faster),
+  // holding against it opens you out (slower). Let go and you spot the
+  // landing: the shape that finishes on a whole `unit` at touchdown, if one
+  // is within reach. With no wind-up at all the arms can start a lazy turn.
+  function rotate(L, I, angle, input, unit, grabbing, dt) {
+    let want = 1;
+    if (input && Math.abs(L) < ARM_MAX && (Math.sign(input) === Math.sign(L) || Math.abs(L) < 0.2)) {
+      L = THREE.MathUtils.clamp(L + input * ARM_TORQUE * dt, -ARM_MAX, ARM_MAX);
+    } else if (input) {
+      want = Math.sign(input) === Math.sign(L) ? I_TUCK : I_OPEN;
+    } else if (Math.abs(L) > 0.05) {
+      const tl = Math.max(0.05, air.tl);
+      const dir = Math.sign(L);
+      // Of the whole turns still ahead, aim for one this body can actually
+      // stretch or shrink to; otherwise the closest miss.
+      let best = Infinity;
+      let bestCost = Infinity;
+      const base = dir > 0 ? Math.ceil(angle / unit - 0.03) : Math.floor(angle / unit + 0.03);
+      for (let k = 0; k < 5; k++) {
+        const rem = (base + dir * k) * unit - angle;
+        if (rem * dir < 0.02) continue;
+        const Ineed = Math.abs(L) / (Math.abs(rem) / tl);
+        const miss = Ineed < I_SPOT ? I_SPOT / Ineed : Ineed > I_OPEN ? Ineed / I_OPEN : 1;
+        const cost = (miss - 1) * 10 + Math.abs(Math.log(Ineed));
+        if (cost < bestCost) {
+          bestCost = cost;
+          best = Ineed;
+        }
+      }
+      if (Number.isFinite(best)) want = THREE.MathUtils.clamp(best, I_SPOT, I_OPEN);
+      // A small turn that can't make the next 180: fight it with the arms
+      // and land as straight as you can.
+      if (bestCost > 0.5 && Math.abs(L) < 3.4) {
+        L -= Math.sign(L) * Math.min(Math.abs(L), ARM_TORQUE * 3.2 * dt);
+        want = I_OPEN;
+      }
     }
-    return { L, angle: angle + (L / I) * dt };
+    if (grabbing) want = Math.min(want, I_GRAB);
+    I += (want - I) * Math.min(1, dt * 5);
+    return { L, I, angle: angle + (L / I) * dt };
   }
 
   function stepAir(dt) {
@@ -572,30 +647,47 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
       air.tlAge = 0;
     }
 
-    const boost = 1 + 0.35 * air.charge;
     const spinIn = (held('left') ? 1 : 0) - (held('right') ? 1 : 0);
-    const flipIn = (held('up') ? 1 : 0) - (held('down') ? 1 : 0);
-    // Pulling in for a grab makes the body compact: it spins faster.
-    const I = air.grab && held('grab') ? 0.72 : 1;
-    const s = rotate(air.Ls, air.spin, spinIn, SPIN_TORQUE, SPIN_RATE * boost, Math.PI, I, dt);
+    const dirIn = (held('up') ? 1 : 0) - (held('down') ? 1 : 0);
+    const grabbing = !!air.grab && held('grab');
+    // While grabbing, up / down pick the grab instead of shaping the flip.
+    const flipIn = held('grab') ? 0 : dirIn;
+    const s = rotate(air.Ls, air.Is, air.spin, spinIn, Math.PI, grabbing, dt);
     air.Ls = s.L;
+    air.Is = s.I;
     air.spin = s.angle;
-    spinVel = s.L / I;
-    const fl = rotate(air.Lf, air.flip, flipIn, FLIP_TORQUE, FLIP_RATE * boost, 2 * Math.PI, I, dt);
+    spinVel = s.L / s.I;
+    const fl = rotate(air.Lf, air.If, air.flip, flipIn, 2 * Math.PI, grabbing, dt);
     air.Lf = fl.L;
+    air.If = fl.I;
     air.flip = fl.angle;
-    flipVel = fl.L / I;
+    flipVel = fl.L / fl.I;
     air.tilt *= Math.exp(-dt * 3);
     air.roll *= Math.exp(-dt * 4);
     air.pitch = air.flip;
     air.heading = air.heading0 + air.spin;
     airQuat();
+    // Grabs: Shift alone is a mute, with W a japan, with S a tail, with A / D
+    // a safety. Change the direction (or let go and grab again) to link
+    // grabs in one air: "Mute to Tail".
     if (held('grab')) {
       air.grabT += dt;
-      if (air.grabT > 0.2 && !air.grab) {
-        air.grab = flipIn > 0 ? 'japan' : flipIn < 0 ? 'tail' : Math.abs(air.Ls) > 2 ? 'safety' : 'mute';
+      const want = dirIn > 0 ? 'japan' : dirIn < 0 ? 'tail' : spinIn ? 'safety' : 'mute';
+      if (want !== air.pending) {
+        air.pending = want;
+        air.pendT = 0;
       }
-    } else if (air.grabT > 0) air.grabT = Math.max(0, air.grabT - dt * 2);
+      air.pendT += dt;
+      if (air.pendT > 0.16 && (air.grab !== want || !air.holding)) {
+        air.grab = want;
+        air.holding = true;
+        if (air.grabs[air.grabs.length - 1] !== want) air.grabs.push(want);
+      }
+    } else {
+      air.pending = null;
+      air.holding = false;
+      if (air.grabT > 0) air.grabT = Math.max(0, air.grabT - dt * 2);
+    }
 
     // Onto a rail or box?
     if (vel.y < 1.5 && tryGrind()) return;
@@ -652,10 +744,10 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
     absorb = Math.min(1, impact / 8);
     shake = Math.min(0.35, impact * 0.025);
     spray.emit(pos, tmp2.copy(vt).multiplyScalar(0.4), Math.round(8 + impact * 3), 3, 1.6);
-    const name = trickName(air.spin, air.flip, air.grab, { switchTakeoff: air.switchTakeoff });
+    const name = trickName(air.spin, air.flip, air.grabs, { switchTakeoff: air.switchTakeoff, butter: air.butter });
     const airtime = air.t;
     if (name) {
-      let pts = trickPoints(air.spin, air.flip, air.grab, air.switchTakeoff);
+      let pts = trickPoints(air.spin, air.flip, air.grabs, air.switchTakeoff);
       if (clean) pts += 600;
       else pts = Math.round(pts * 0.5);
       score += pts;
@@ -1022,9 +1114,10 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
   let poleT = 0;
   let foldNow = 0;
   let grabNow = 0;
+  let lastGrab = null;
 
   function update(dt) {
-    if (!active) return;
+    if (!active || paused) return;
     dt = Math.min(dt, 0.05);
     clock += dt;
     if (chair) stepChair();
@@ -1068,7 +1161,10 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
       foldT = air.tl < 0.22 ? 0 : 0.15 + 0.35 * rot;
     }
     foldNow += (foldT - foldNow) * Math.min(1, dt * 7);
-    const grabbing = inAir && air.grab && held('grab') && air.tl > 0.15;
+    const grabbing = inAir && air.grab && air.holding && air.tl > 0.15;
+    // Switching grab: the hand lets go and reaches for the new spot.
+    if (air?.grab && air.grab !== lastGrab) grabNow = Math.min(grabNow, 0.3);
+    lastGrab = air?.grab || null;
     grabNow += ((grabbing ? 1 : 0) - grabNow) * Math.min(1, dt * 9);
     const travel = Math.atan2(vel.x, vel.z);
     const sw = onGround && Math.cos(travel - yaw) < 0;
@@ -1177,7 +1273,7 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
       const bits = [];
       if (deg >= 90) bits.push(`${deg}°`);
       if (flips > 0.2) bits.push(`${air.flip < 0 ? 'back' : 'front'} ×${flips.toFixed(1)}`);
-      if (air.grab) bits.push(GRAB_NAMES[air.grab]);
+      if (air.grabs.length) bits.push(grabList(air.grabs));
       live = bits.join(' · ');
     } else if (onGround && Math.abs(butterSpin) > 0.6) live = `butter ${Math.round(Math.abs(butterSpin) * 57.3)}°`;
     else if (grind) live = `${Math.abs(Math.sin(grind.off)) > 0.7 ? 'boardslide' : '50-50'} ${grind.time.toFixed(1)}s`;
@@ -1197,6 +1293,13 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
     boardLift,
     get active() {
       return active;
+    },
+    get paused() {
+      return paused;
+    },
+    set paused(v) {
+      paused = v;
+      keys.clear();
     },
     get position() {
       return pos;

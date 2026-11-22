@@ -638,3 +638,230 @@ body.skiing #labels {
 .ski-prompt[hidden] {
   display: none;
 }
+
+/* ------------------------------------------------------------ rider panel */
+.rider-open {
+  background: #131416;
+  color: #fff;
+  border-color: #131416;
+}
+.ski-rider {
+  pointer-events: auto;
+  width: 38px;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(19, 20, 22, 0.78);
+  color: #fff;
+  font-size: 20px;
+  cursor: pointer;
+}
+.rider {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(10, 18, 28, 0.45);
+  backdrop-filter: blur(3px);
+  padding: 16px;
+}
+.rider[hidden] {
+  display: none;
+}
+.rider-card {
+  width: min(900px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  background: #fbfcfd;
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  color: var(--ink);
+}
+.rider-card header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: #fbfcfd;
+  border-bottom: 1px solid var(--line);
+}
+.rider-tabs {
+  display: flex;
+  gap: 6px;
+}
+.rider-tabs button,
+.rider-close {
+  font: 700 16px/1 'Barlow Condensed', Impact, sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--muted);
+  cursor: pointer;
+}
+.rider-tabs button[aria-selected='true'] {
+  background: #131416;
+  border-color: #131416;
+  color: #ffc20e;
+}
+.rider-close {
+  padding: 8px 11px;
+}
+.rider-body {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 18px;
+  padding: 16px;
+}
+.rider-body[data-pane='keys'] {
+  display: block;
+}
+.rider-body[hidden] {
+  display: none;
+}
+.rider-stage {
+  position: relative;
+  border-radius: 12px;
+  background: linear-gradient(#bcd6ee, #eaf2f9 70%);
+  overflow: hidden;
+  align-self: start;
+}
+.rider-stage canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  cursor: grab;
+  touch-action: none;
+}
+.rider-stage span {
+  position: absolute;
+  bottom: 8px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+.rider-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+}
+.rider-row > label {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--muted);
+}
+.rider-swatches,
+.rider-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.rider-swatches .sw {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px var(--line);
+  cursor: pointer;
+  padding: 0;
+}
+.rider-swatches .sw.on {
+  box-shadow: 0 0 0 2px var(--ink);
+}
+.rider-swatches input[type='color'] {
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+.rider-chips .chip {
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #fff;
+  font: 600 12px/1.2 Inter, sans-serif;
+  color: var(--ink);
+  cursor: pointer;
+}
+.rider-chips .chip.on {
+  background: #131416;
+  border-color: #131416;
+  color: #fff;
+}
+.rider-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 12px;
+}
+.rider-reset {
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #fff;
+  font: 600 12px/1.2 Inter, sans-serif;
+  cursor: pointer;
+}
+.rider-note {
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+.rider-keys {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.rider-key {
+  display: grid;
+  grid-template-columns: 1fr 120px 120px;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+.keycap {
+  padding: 7px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  border-bottom-width: 3px;
+  background: #fff;
+  font: 700 13px/1 Inter, sans-serif;
+  cursor: pointer;
+}
+.keycap.empty {
+  color: #b5bec7;
+}
+.keycap.wait {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+@media (max-width: 640px) {
+  .rider-body {
+    grid-template-columns: 1fr;
+  }
+  .rider-stage {
+    max-width: 260px;
+    justify-self: center;
+  }
+  .rider-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .rider-key {
+    grid-template-columns: 1fr 90px 90px;
+  }
+}
