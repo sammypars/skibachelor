@@ -34,6 +34,15 @@ Skiing:
 - `E` at the bottom of a lift: ride the chair up (`E` again skips to the top).
 - On a phone or tablet, use the on-screen pad and the **POP** button.
 
+Crash and you slide, tumble and come to rest; three seconds later you get
+back up where you stopped, skis on, ready to go.
+
+The Rider panel (gear button, or **Rider & controls**) dresses your skier:
+fit, jacket and pants colours and fabrics, helmet, hood up or down, face
+mask, goggle lens, boots, a backpack and the ski graphic. To see the rider
+in eight poses side by side while working on the model, run the dev server
+and open `tools/skier-lab.html`.
+
 Let go of a spin or flip and it carries on to the next full 180 or full
 flip, then stops. Land with your skis along your travel (forwards or
 switch) and your feet under you, or you crash. The physics: gravity along

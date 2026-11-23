@@ -490,6 +490,20 @@ export function createSkierModel({ look = {}, envMap = null } = {}) {
     mesh(new THREE.TorusGeometry(0.1, 0.045, 10, 18, Math.PI * 1.1).rotateX(Math.PI / 2 + 0.35).rotateY(Math.PI - 0.15 * Math.PI), M.sleeve, spine, 0, TORSO + 0.005, -0.04);
     mesh(new THREE.SphereGeometry(0.1, 16, 10).scale(1.25, 0.55, 0.6), M.sleeve, spine, 0, TORSO - 0.03, -0.12);
   }
+  // Backpack: a slim park pack riding high on the back, with shoulder
+  // straps over the jacket and a sternum strap.
+  if (L.pack === 'pack') {
+    const packM = new THREE.MeshPhysicalMaterial({ color: 0x23272c, roughness: 0.8, sheen: 0.5, sheenColor: new THREE.Color(0x667788) });
+    mesh(softBox(0.3, 0.42, 0.13, 0.05, 3), packM, spine, 0, 0.27, -0.215);
+    mesh(softBox(0.24, 0.16, 0.05, 0.02, 2), packM, spine, 0, 0.17, -0.29); // front pocket
+    mesh(new THREE.BoxGeometry(0.2, 0.012, 0.02), M.trim, spine, 0, 0.255, -0.316); // pocket zip
+    for (const s of [-1, 1]) {
+      // Over the shoulder and down the chest.
+      mesh(new THREE.TorusGeometry(0.17, 0.016, 6, 14, Math.PI * 0.95).scale(0.6, 1, 1).rotateY(Math.PI / 2).rotateX(-0.15), packM, spine, s * 0.105, 0.33, -0.01);
+      mesh(softBox(0.05, 0.22, 0.02, 0.008, 1), packM, spine, s * 0.1, 0.27, 0.168);
+    }
+    mesh(new THREE.BoxGeometry(0.2, 0.025, 0.02), M.trim, spine, 0, 0.32, 0.178);
+  }
   const neck = joint(spine, 0, TORSO + 0.03, 0.01);
   const head = new THREE.Group();
   neck.add(head);

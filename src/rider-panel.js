@@ -21,6 +21,7 @@ const CHOICES = {
   jacketDesign: [['panels', 'Panels'], ['solid', 'Solid'], ['colorblock', 'Colour block'], ['camo', 'Camo'], ['check', 'Flannel'], ['stripes', 'Stripes'], ['fade', 'Fade']],
   pantsDesign: [['solid', 'Solid'], ['cargo', 'Cargo'], ['camo', 'Camo'], ['check', 'Flannel'], ['stripes', 'Stripes']],
   hood: [['down', 'Down'], ['up', 'Up over the helmet']],
+  pack: [['none', 'None'], ['pack', 'Backpack']],
   lens: [['sunset', 'Sunset'], ['ice', 'Ice'], ['gold', 'Gold'], ['smoke', 'Smoke'], ['emerald', 'Emerald']],
   skiDesign: [['chevron', 'Chevron'], ['stripe', 'Racing stripe'], ['flames', 'Flames'], ['checker', 'Checker'], ['wood', 'Woodgrain']],
 };
@@ -117,6 +118,7 @@ export function createRiderPanel({ onOpen, onClose } = {}) {
     chipRow('pantsDesign', 'Pants design'),
     colorRow('helmet', 'Helmet'),
     chipRow('hood', 'Hood'),
+    chipRow('pack', 'Pack'),
     colorRow('gaiter', 'Face mask'),
     chipRow('lens', 'Goggle lens'),
     colorRow('boot', 'Boots'),
@@ -137,6 +139,7 @@ export function createRiderPanel({ onOpen, onClose } = {}) {
       pantsDesign: pick(CHOICES.pantsDesign)[0],
       helmet: pick(SWATCHES.helmet),
       hood: pick(CHOICES.hood)[0],
+      pack: pick(CHOICES.pack)[0],
       gaiter: pick(SWATCHES.gaiter),
       boot: pick(SWATCHES.boot),
       lens: pick(CHOICES.lens)[0],

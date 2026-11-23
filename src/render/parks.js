@@ -209,7 +209,16 @@ class SnowBuilder {
     this.hf = hf;
     this.pos = [];
     this.uv = [];
+    this.col = [];
     this.idx = [];
+  }
+  // Snow tint: groomed tops stay bright white; hand-cut sidewalls are a
+  // touch cooler and darker, deepening toward the base where they meet the
+  // slope, so a feature's shape reads even in flat light.
+  tint(top, k) {
+    if (top) return this.col.push(1, 1, 1);
+    const d = 1 - k; // 0 at the top edge, 1 at the foot
+    this.col.push(0.9 - 0.05 * Math.sin(Math.PI * d), 0.93 - 0.04 * Math.sin(Math.PI * d), 0.985);
   }
   // A profile h(a) laid along a run from distance s0, centered `offset`
   // meters sideways, `width` wide, with sloped sides.
@@ -219,9 +228,12 @@ class SnowBuilder {
     // the bigger the feature, like a contest build.
     const side = Math.max(0.8, profile.height * (profile.height > 2.5 ? 0.75 : 1.0));
     const na = Math.max(4, Math.ceil(profile.length / 0.5));
+    // A tight fillet just outside each top edge keeps the edge crisp
+    // (smoothed normals would otherwise round it off like a pillow).
+    const f = Math.min(0.18, side * 0.2);
     const cs = profile.cross
-      ? [-width / 2 - side, -width / 2, -width * 0.375, -width / 4, -width / 8, 0, width / 8, width / 4, width * 0.375, width / 2, width / 2 + side]
-      : [-width / 2 - side, -width / 2, -width / 4, 0, width / 4, width / 2, width / 2 + side];
+      ? [-width / 2 - side, -width / 2 - side * 0.5, -width / 2 - f, -width / 2, -width * 0.375, -width / 4, -width / 8, 0, width / 8, width / 4, width * 0.375, width / 2, width / 2 + f, width / 2 + side * 0.5, width / 2 + side]
+      : [-width / 2 - side, -width / 2 - side * 0.5, -width / 2 - f, -width / 2, -width / 4, 0, width / 4, width / 2, width / 2 + f, width / 2 + side * 0.5, width / 2 + side];
     const base = this.pos.length / 3;
     const p = {};
     for (let i = 0; i <= na; i++) {
@@ -231,9 +243,13 @@ class SnowBuilder {
         const shift = profile.shift ? profile.shift(a) : 0;
         beside(run, s0 + a, offset + shift + c, p);
         const u = Math.max(-1, Math.min(1, c / (width / 2)));
-        const k = Math.abs(c) <= width / 2 ? 1 : 1 - (Math.abs(c) - width / 2) / side;
+        const top = Math.abs(c) <= width / 2;
+        // Sidewalls: steep near the top edge, easing out at the foot.
+        const t = top ? 0 : (Math.abs(c) - width / 2) / side;
+        const k = top ? 1 : 1 - Math.pow(t, 0.75);
         const cross = profile.cross ? profile.cross(a, u) : 1;
         this.pos.push(p.x, hf.heightAt(p.x, p.z) + h * k * cross - 0.15, p.z);
+        this.tint(top || h < 0.05, k);
         // Corduroy runs down the fall line: u across, v along.
         this.uv.push((offset + shift + c) / CORD, (s0 + a) / CORD);
       }
@@ -307,6 +323,9 @@ class SnowBuilder {
         const y = (yc + prof(c) * taper) * (1 - outer) + (ground + prof(c) * taper) * outer;
         this.pos.push(px, y + 0.05, pz);
         this.uv.push(c / CORD, (s0 + a) / CORD);
+        // Transitions and outer banks a shade cooler than the floor and decks.
+        const ax = Math.abs(c);
+        this.tint(ax <= half || (ax > half + R && ax <= half + R + deck), ax > half + R + deck ? 1 - outer : 0.5);
       }
     }
     const nc = cs.length;
@@ -322,6 +341,7 @@ class SnowBuilder {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
     g.setAttribute('uv', new THREE.Float32BufferAttribute(this.uv, 2));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
     g.setIndex(this.idx);
     g.computeVertexNormals();
     const m = new THREE.Mesh(g, material);
@@ -341,7 +361,7 @@ function spanBox(a, b, w, h) {
 }
 function spanTube(a, b, r) {
   const len = a.distanceTo(b);
-  const g = new THREE.CylinderGeometry(r, r, len, 8).rotateX(Math.PI / 2);
+  const g = new THREE.CylinderGeometry(r, r, len, r > 0.1 ? 14 : 12).rotateX(Math.PI / 2);
   const m = new THREE.Matrix4().lookAt(a, b, new THREE.Vector3(0, 1, 0));
   m.setPosition(new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5));
   return g.applyMatrix4(m);
@@ -617,6 +637,10 @@ export function buildParks(world) {
   const roofs = [];
   const yellow = []; // feature markers, end caps
   const flagPoles = [];
+  const bamboo = []; // rope-line poles
+  const ropes = [];
+  const tips = []; // orange pole tips
+  const roped = []; // park runs that get rope lines
   const flags = [];
   const posts = [];
   const wood = [];
@@ -641,7 +665,11 @@ export function buildParks(world) {
   const postsUnder = (ps, w) => {
     for (const e of ps) {
       const g = hf.heightAt(e.x, e.z);
-      if (e.y - g > 0.2) posts.push(spanBox(new THREE.Vector3(e.x, e.y - 0.05, e.z), new THREE.Vector3(e.x, g - 0.4, e.z + 0.01), w, w));
+      if (e.y - g > 0.2) {
+        posts.push(spanBox(new THREE.Vector3(e.x, e.y - 0.05, e.z), new THREE.Vector3(e.x, g - 0.4, e.z + 0.01), w, w));
+        // Steel foot plate bedded in the snow.
+        posts.push(new THREE.BoxGeometry(w * 3.2, 0.04, w * 3.2).translate(e.x, g - 0.06, e.z));
+      }
     }
   };
 
@@ -887,6 +915,8 @@ export function buildParks(world) {
       }
     }
 
+    if (cfg.kind !== 'pipe') roped.push(run);
+
     // Banner over the entrance with the park's name.
     along(run, 5, pt);
     const span = cfg.kind === 'pipe' ? 32 : 20;
@@ -930,8 +960,35 @@ export function buildParks(world) {
       snowTiles.triangle(P[a], P[a + 1], P[a + 2], P[b], P[b + 1], P[b + 2], P[c], P[c + 1], P[c + 2]);
     }
   }
+  // Rope lines down both edges of the park: bamboo poles every few metres
+  // with orange tips and a sagging rope between them. The pipe's own
+  // walls fence it, so it goes without.
+  for (const run of roped) {
+    const edge = Math.max(8, run.width / 2 - 1.5);
+    for (const side of [-1, 1]) {
+      let prev = null;
+      for (let a = 2; a < run.length - 4; a += 5) {
+        const p = at(run, a, side * edge, 0);
+        if (snowTiles.at(p.x, p.z) > p.y + 0.05) {
+          prev = null; // don't plant poles on shaped snow
+          continue;
+        }
+        bamboo.push(new THREE.CylinderGeometry(0.022, 0.026, 1.5, 6).translate(p.x, p.y + 0.55, p.z));
+        tips.push(new THREE.CylinderGeometry(0.03, 0.03, 0.22, 6).translate(p.x, p.y + 1.22, p.z));
+        const top = p.clone().setY(p.y + 0.95);
+        if (prev) {
+          // Two segments with a little sag in the middle.
+          const mid = prev.clone().lerp(top, 0.5);
+          mid.y -= 0.12;
+          ropes.push(spanTube(prev, mid, 0.008), spanTube(mid, top, 0.008));
+        }
+        prev = top;
+      }
+    }
+  }
+
   // Shaped snow: bright groomed corduroy.
-  group.add(snow.mesh(addSparkle(new THREE.MeshStandardMaterial({ color: 0xf6f9fc, map: corduroyTexture(), roughness: 0.82 }))));
+  group.add(snow.mesh(addSparkle(new THREE.MeshStandardMaterial({ color: 0xf6f9fc, map: corduroyTexture(), roughness: 0.82, vertexColors: true }))));
   const std = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.6, ...extra });
   const addList = (list, mat) => {
     if (list.length) group.add(new THREE.Mesh(mergeGeometries(list.map((g) => (g.index ? g.toNonIndexed() : g))), mat));
@@ -945,6 +1002,9 @@ export function buildParks(world) {
   addList(dye, new THREE.MeshBasicMaterial({ color: 0x2b7bd6, transparent: true, opacity: 0.75, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, side: THREE.DoubleSide }));
   addList(yellow, std(0xffc20e, { roughness: 0.45, emissive: 0x6a4c00 }));
   addList(flagPoles, std(0x1c1e21));
+  addList(bamboo, std(0xc9a86a, { roughness: 0.7 }));
+  addList(tips, std(0xff6a1a, { roughness: 0.5, emissive: 0x5a1e00 }));
+  addList(ropes, std(0xffc20e, { roughness: 0.8 }));
   addList(flags, std(0xffc20e, { side: THREE.DoubleSide, emissive: 0x6a4c00 }));
   addList(bus.lower, std(0x3aa39b, { roughness: 0.5 }));
   addList(bus.upper, std(0xf1e8d4, { roughness: 0.5 }));

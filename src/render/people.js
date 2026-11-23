@@ -310,6 +310,7 @@ export function buildPeople(world, lifts, race, parks) {
     const p = {
       board: rand() < BOARDER_SHARE,
       skill: 0.75 + rand() * 0.45,
+      size: 0.9 + rand() * 0.17, // people come in all heights
       phase: rand() * Math.PI * 2,
       jacket: color(JACKETS),
       pants: color(PANTS),
@@ -356,7 +357,8 @@ export function buildPeople(world, lifts, race, parks) {
 
   // Pose a person at a point on a run with a sideways slope of the path
   // (k = d offset / d s) and a lean.
-  function pose(run, s, offset, k, lean) {
+  const sc = new THREE.Vector3();
+  function pose(run, s, offset, k, lean, size = 1) {
     beside(run, s, offset, pt);
     pos.set(pt.x, hf.heightAt(pt.x, pt.z), pt.z);
     const vx = pt.dx - pt.dz * k;
@@ -366,7 +368,7 @@ export function buildPeople(world, lifts, race, parks) {
     const pitch = Math.atan2(pos.y - ahead, 2 * Math.hypot(vx, vz)) * 0.8;
     e.set(pitch, Math.atan2(vx, vz), lean);
     q.setFromEuler(e);
-    m.compose(pos, q, one);
+    m.compose(pos, q, sc.setScalar(size));
     return m;
   }
 
@@ -508,10 +510,9 @@ export function buildPeople(world, lifts, race, parks) {
       const v = p.base * (0.7 + Math.min(0.9, slope * 1.4));
       p.s += v * dt;
       p.phase += ((v * dt) / p.turnLen) * Math.PI;
-      if (p.s >= p.run.length - 1) {
-        nextRun(p);
-        continue;
-      }
+      // Onto the next run without skipping a frame: every person keeps the
+      // same instance slot (and so the same colours) every frame.
+      if (p.s >= p.run.length - 1) nextRun(p);
       const w = Math.PI / p.turnLen;
       // Fade turns in and out at the ends of a run.
       const fade = Math.min(1, p.s / 25, (p.run.length - p.s) / 25);
@@ -519,7 +520,7 @@ export function buildPeople(world, lifts, race, parks) {
       const off = p.lane * fade + amp * Math.sin(p.phase);
       const k = amp * w * Math.cos(p.phase);
       const lean = -Math.sin(p.phase) * Math.min(0.5, amp * w * w * 6) * (p.board ? 1.4 : 1);
-      pose(p.run, p.s, off, k, lean);
+      pose(p.run, p.s, off, k, lean, p.size);
       if (p.board) boarders.set(nb++, m, first && p.jacket, p.pants);
       else skiers.set(ns++, m, first && p.jacket, p.pants);
     }

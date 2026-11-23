@@ -25,6 +25,7 @@ export const LOOK_DEFAULT = {
   boot: '#2a2e34',
   gaiter: '#131416',
   hood: 'down', // down | up
+  pack: 'none', // none | pack
   fit: 'regular', // slim | regular | baggy | xxl
   jacketDesign: 'panels', // panels | solid | colorblock | camo | check | stripes | fade
   pantsDesign: 'solid', // solid | camo | cargo | check | stripes

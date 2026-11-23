@@ -1338,9 +1338,10 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
     else if (grind) live = `${Math.abs(Math.sin(grind.off)) > 0.7 ? 'boardslide' : '50-50'} ${grind.time.toFixed(1)}s`;
     liveEl.textContent = live;
     liveEl.classList.toggle('show', !!live);
-    hud.querySelector('.ski-speed').textContent = `${Math.round(speed * 2.23694)} mph`;
+    hud.querySelector('.ski-speed').textContent = Math.round(speed * 2.23694);
     hud.querySelector('.ski-score').textContent = score.toLocaleString();
     hud.querySelector('.ski-load').style.width = `${Math.round(load * 100)}%`;
+    hud.querySelector('.ski-loadbar').style.opacity = load > 0.01 ? '1' : '0';
   }
 
   return {

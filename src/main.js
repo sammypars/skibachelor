@@ -23,7 +23,13 @@ import { along } from './world/path.js';
 const M2FT = 3.28084;
 const $ = (s) => document.querySelector(s);
 const loading = $('#loading');
-const setStatus = (t) => (loading.querySelector('p').textContent = t);
+let loadStep = 0;
+const setStatus = (t) => {
+  loading.querySelector('p').textContent = t;
+  loadStep++;
+  const bar = loading.querySelector('.load-bar i');
+  if (bar) bar.style.width = `${Math.min(96, loadStep * 17)}%`;
+};
 const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
 
 // ---------------------------------------------------------------- renderer
@@ -417,6 +423,25 @@ function updateLabels() {
 }
 
 // ---------------------------------------------------------------- panel
+// Fold the panel away for a clear view; remembered between visits.
+const panelEl = $('#panel');
+const panelOpen = $('.panel-open');
+function foldPanel(folded) {
+  panelEl.classList.toggle('folded', folded);
+  panelOpen.hidden = !folded;
+  try {
+    localStorage.setItem('skibachelor.panel.folded', folded ? '1' : '');
+  } catch {
+    /* private mode */
+  }
+}
+$('.panel-fold').addEventListener('click', () => foldPanel(true));
+panelOpen.addEventListener('click', () => foldPanel(false));
+try {
+  if (localStorage.getItem('skibachelor.panel.folded')) foldPanel(true);
+} catch {
+  /* private mode */
+}
 const list = $('#lift-list');
 for (const l of lifts.lifts) {
   const li = document.createElement('li');
@@ -600,6 +625,7 @@ function frame() {
     hudTimer = 0;
     updateHud();
   }
+  if (forest.group.visible) forest.updateDetail(camera.position);
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
