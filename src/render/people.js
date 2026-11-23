@@ -58,7 +58,7 @@ function block(w, h, d, c, color, rx = 0, ry = 0, rz = 0) {
 }
 // Goggles: an open band round the front of the head.
 function goggles(c, r, color) {
-  const g = new THREE.CylinderGeometry(r, r, 0.062, 10, 1, true, -1.0, 2.0).translate(c.x, c.y, c.z);
+  const g = new THREE.CylinderGeometry(r, r, 0.082, 12, 1, true, -1.15, 2.3).scale(1.04, 1, 1.14).translate(c.x, c.y, c.z);
   return colored(g, color);
 }
 // Older code builds simple pieces with this; keep it for other figures.
@@ -76,27 +76,29 @@ const BOOT = 0xe9ecef;
 function upperBody(out, { pelvis, chest, head, shoulders, elbows, hands, lean = 0 }) {
   const { jacket, skin, helmet } = out;
   // Jacket: hem over the seat up to the shoulders, slightly flattened.
-  jacket.push(seg(pelvis.clone().add(V(0, -0.1, -0.02 * Math.sign(lean || 1))), chest, 0.2, 0.205, WHITE, { sz: 0.74, radial: 10, caps: true }));
-  jacket.push(ball(chest, 0.205, WHITE, 1, 0.5, 0.74, 10, 6));
+  // Long, boxy park cut: the hem hangs over the seat with a little flare.
+  jacket.push(seg(pelvis.clone().add(V(0, -0.2, -0.03 * Math.sign(lean || 1))), chest, 0.225, 0.215, WHITE, { sz: 0.8, radial: 12, caps: true }));
+  jacket.push(ball(chest, 0.215, WHITE, 1.08, 0.5, 0.76, 12, 6));
   // Hood bunched behind the neck, gaiter.
   const neck = chest.clone().lerp(head, 0.45);
   jacket.push(ball(neck.clone().add(V(0, 0, -0.09)), 0.1, WHITE, 1.35, 0.7, 0.85));
-  jacket.push(seg(neck.clone().add(V(0, -0.04, 0)), neck.clone().add(V(0, 0.08, 0.01)), 0.09, 0.085, DARK, { caps: false }));
+  jacket.push(seg(neck.clone().add(V(0, -0.05, 0)), neck.clone().add(V(0, 0.05, 0.01)), 0.1, 0.098, WHITE, { caps: false, radial: 10 })); // funnel collar
+  skin.push(seg(neck.clone().add(V(0, 0.02, 0.01)), head.clone().add(V(0, -0.01, 0.012)), 0.095, 0.1, DARK, { caps: true, radial: 10 })); // face mask
   // Arms.
   for (let k = 0; k < 2; k++) {
     const S = shoulders[k];
     const E = elbows[k];
     const H = hands[k];
-    jacket.push(ball(S, 0.075, WHITE));
-    jacket.push(seg(S, E, 0.072, 0.066, WHITE));
-    jacket.push(ball(E, 0.062, WHITE, 1, 1, 1, 6, 5));
-    jacket.push(seg(E, H.clone().lerp(E, 0.15), 0.062, 0.06, WHITE));
-    skin.push(ball(H, 0.054, DARK, 0.9, 1.25, 1.1, 7, 5)); // glove
+    jacket.push(ball(S, 0.086, WHITE));
+    jacket.push(seg(S, E, 0.082, 0.074, WHITE));
+    jacket.push(ball(E, 0.07, WHITE, 1, 1, 1, 7, 5));
+    jacket.push(seg(E, H.clone().lerp(E, 0.15), 0.068, 0.072, WHITE));
+    skin.push(ball(H, 0.056, DARK, 0.95, 1.25, 1.1, 7, 5)); // mitt
   }
   // Head, helmet, goggles.
   skin.push(ball(head, 0.1, SKIN, 0.92, 1.1, 1.0));
-  helmet.push(ball(head.clone().add(V(0, 0.035, -0.012)), 0.133, WHITE, 1.0, 0.98, 1.12, 10, 6, Math.PI * 0.6));
-  skin.push(goggles(head.clone().add(V(0, 0.02, 0.008)), 0.138, GOGGLE));
+  helmet.push(ball(head.clone().add(V(0, 0.035, -0.012)), 0.138, WHITE, 1.0, 0.95, 1.12, 12, 7, Math.PI * 0.6));
+  skin.push(goggles(head.clone().add(V(0, 0.025, 0.004)), 0.152, GOGGLE));
 }
 
 function legs(out, { hips, knees, ankles, toe = V(0, 0, 1) }) {
@@ -109,9 +111,9 @@ function legs(out, { hips, knees, ankles, toe = V(0, 0, 1) }) {
     gear.push(ball(A.clone().add(V(0, -0.05, 0)).addScaledVector(toe, 0.04), 0.5, BOOT, 0.12, 0.14, 0.32, 8, 5, Math.PI / 2));
     gear.push(seg(A.clone().add(V(0, -0.06, 0)), A.clone().add(V(0, 0.12, 0)), 0.078, 0.07, BOOT, { caps: false }));
     // Baggy pants over the boot.
-    gear.push(seg(A.clone().add(V(0, 0.06, 0)), K, 0.098, 0.09, WHITE));
-    gear.push(ball(K, 0.092, WHITE));
-    gear.push(seg(K, H, 0.098, 0.118, WHITE));
+    gear.push(seg(A.clone().add(V(0, -0.04, 0)), K, 0.118, 0.1, WHITE, { radial: 9 }));
+    gear.push(ball(K, 0.102, WHITE, 1, 1, 1, 9, 6));
+    gear.push(seg(K, H, 0.106, 0.13, WHITE, { radial: 9 }));
   }
   gear.push(ball(hips[0].clone().lerp(hips[1], 0.5), 0.16, WHITE, 1.15, 0.85, 0.95));
 }

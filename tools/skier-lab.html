@@ -1,0 +1,114 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Skier lab</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #c9d6e3; overflow: hidden; font: 12px system-ui; }
+  #info { position: fixed; left: 8px; top: 6px; color: #234; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="info">Skier lab: ?view=front|side|back|three · ?npc=1 for crowd figures · drag to turn</div>
+<script type="module">
+import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { createSkierModel } from '../src/skier-model.js';
+import { skierParts, boarderParts } from '../src/render/people.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+const qs = new URLSearchParams(location.search);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xc9d6e3);
+const pmrem = new THREE.PMREMGenerator(renderer);
+const envMap = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.add(new THREE.HemisphereLight(0xdfeaff, 0x8a9bb0, 1.2));
+const sun = new THREE.DirectionalLight(0xffffff, 2.4);
+sun.position.set(3, 6, 4);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -8, right: 8, top: 4, bottom: -4 });
+scene.add(sun);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(40, 20), new THREE.MeshStandardMaterial({ color: 0xf4f7fb, roughness: 0.9 }));
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+const look = qs.get('look') ? JSON.parse(qs.get('look')) : {};
+const POSES = [
+  ['stance', { crouch: 0.25 }],
+  ['tuck', { tuck: 1 }],
+  ['carve', { crouch: 0.45, lean: 0.5 }],
+  ['mute', { air: 1, grab: 1, grabType: 'mute', fold: 0.5 }],
+  ['japan', { air: 1, grab: 1, grabType: 'japan', fold: 0.5 }],
+  ['safety', { air: 1, grab: 1, grabType: 'safety', fold: 0.4 }],
+  ['tail', { air: 1, grab: 1, grabType: 'tail', fold: 0.3 }],
+  ['airArms', { air: 1, airArms: 1 }],
+];
+const figs = [];
+const holders = [];
+if (qs.get('npc')) {
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.72 });
+  [skierParts(), boarderParts()].forEach((parts, i) => {
+    const g = new THREE.Group();
+    for (const k of ['jacket', 'gear', 'skin', 'helmet']) {
+      if (!parts[k]?.length) continue;
+      const m = new THREE.Mesh(mergeGeometries(parts[k]), mat);
+      m.castShadow = true;
+      g.add(m);
+    }
+    g.position.x = (i - 0.5) * 2.2;
+    scene.add(g);
+    holders.push(g);
+  });
+} else {
+  POSES.forEach(([name, p], i) => {
+    const m = createSkierModel({ look, envMap });
+    m.pose(p);
+    const g = new THREE.Group();
+    g.add(m.root);
+    g.position.x = (i - (POSES.length - 1) / 2) * 1.75;
+    if (p.air) g.position.y = 0.6;
+    scene.add(g);
+    holders.push(g);
+    figs.push(m);
+  });
+}
+const camera = new THREE.PerspectiveCamera(28, innerWidth / innerHeight, 0.1, 100);
+const single = qs.get('only');
+let turn = { front: 0.35, side: Math.PI / 2, back: Math.PI, three: 0.8 }[qs.get('view') || 'three'];
+if (single != null) {
+  holders.forEach((h, i) => (h.visible = i === +single));
+  holders[+single].position.x = 0;
+  camera.position.set(0, 1.2, 4.2);
+  camera.lookAt(0, 1.0, 0);
+} else {
+  camera.position.set(0, 1.6, qs.get('npc') ? 7 : 17);
+  camera.lookAt(0, 1.0, 0);
+}
+let drag = null;
+addEventListener('pointerdown', (e) => (drag = e.clientX));
+addEventListener('pointermove', (e) => { if (drag != null) { turn += (e.clientX - drag) * 0.01; drag = e.clientX; } });
+addEventListener('pointerup', () => (drag = null));
+function frame() {
+  requestAnimationFrame(frame);
+  for (const h of holders) h.rotation.y = turn;
+  renderer.render(scene, camera);
+}
+frame();
+window.__lab = { figs, holders, setTurn: (t) => (turn = t) };
+</script>
+</body>
+</html>

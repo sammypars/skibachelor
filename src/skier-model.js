@@ -285,6 +285,64 @@ function lathe(profile, segs = 14) {
   return new THREE.LatheGeometry(profile.map(([r, y]) => new THREE.Vector2(r, y)), segs);
 }
 
+// Soft fabric folds: a few crossing waves around and up the garment, so a
+// sleeve or a pant leg reads as cloth rather than a pipe.
+function folds(a, y, s) {
+  return (
+    0.55 * Math.sin(a * 3 + y * 26 + s) * Math.sin(y * 43 - a * 2 + s * 1.7) +
+    0.3 * Math.sin(a * 5 - y * 19 + s * 2.3) +
+    0.15 * Math.sin(a * 9 + y * 61 + s * 0.6)
+  );
+}
+
+// A garment piece: a smooth lathe through the profile rings, each ring
+// squashed to an oval (sx, sz by height) and rippled with folds.
+//   profile  [radius, y] control points, smoothed through a spline
+//   wrinkle  fold depth as a fraction of the radius
+function garment(profile, { segs = 22, rings = 28, sx = 1, sz = 1, wrinkle = 0, seed = 1 } = {}) {
+  const curve = new THREE.SplineCurve(profile.map(([r, y]) => new THREE.Vector2(r, y)));
+  const g = new THREE.LatheGeometry(curve.getPoints(rings), segs);
+  const p = g.attributes.position;
+  const fx = typeof sx === 'function' ? sx : () => sx;
+  const fz = typeof sz === 'function' ? sz : () => sz;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i);
+    const y = p.getY(i);
+    const z = p.getZ(i);
+    const k = 1 + wrinkle * folds(Math.atan2(x, z), y, seed);
+    p.setXYZ(i, x * fx(y) * k, y, z * fz(y) * k);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
+// A rounded box (soft corners), for boots and gloves.
+function softBox(w, h, d, r = 0.02, seg = 3) {
+  const g = new THREE.BoxGeometry(w, h, d, seg * 2, seg * 2, seg * 4);
+  const p = g.attributes.position;
+  const hw = w / 2 - r;
+  const hh = h / 2 - r;
+  const hd = d / 2 - r;
+  const v = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    v.fromBufferAttribute(p, i);
+    c.set(THREE.MathUtils.clamp(v.x, -hw, hw), THREE.MathUtils.clamp(v.y, -hh, hh), THREE.MathUtils.clamp(v.z, -hd, hd));
+    v.sub(c);
+    if (v.lengthSq() > 1e-12) v.setLength(r);
+    v.add(c);
+    p.setXYZ(i, v.x, v.y, v.z);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
+// A band of a sphere: phi around (0 = +x, PI/2 = +z, the front), theta down
+// from the top. Used for the spherical goggle lens and its frame.
+function sphereBand(r, phi0, phiLen, th0, thLen, w = 32, h = 8) {
+  return new THREE.SphereGeometry(r, w, h, phi0, phiLen, th0, thLen);
+}
+
 function joint(parent, x, y, z) {
   const j = new THREE.Group();
   j.position.set(x, y, z);
@@ -302,8 +360,8 @@ function mesh(geo, mat, parent, x = 0, y = 0, z = 0) {
 
 // How baggy the kit is: pants and jacket radius, and how long the jacket hangs.
 const FITS = {
-  slim: { pants: 0.86, jacket: 0.92, hem: 0 },
-  regular: { pants: 1, jacket: 1, hem: 0 },
+  slim: { pants: 0.86, jacket: 0.92, hem: -0.07 },
+  regular: { pants: 1.06, jacket: 1.03, hem: 0 },
   baggy: { pants: 1.26, jacket: 1.12, hem: 0.07 },
   xxl: { pants: 1.48, jacket: 1.25, hem: 0.16 },
 };
@@ -322,12 +380,15 @@ export function createSkierModel({ look = {}, envMap = null } = {}) {
       sheen: 0.6,
       sheenRoughness: 0.5,
       sheenColor: new THREE.Color(0xffffff),
+      side: THREE.DoubleSide,
       ...env,
     }),
-    sleeve: new THREE.MeshPhysicalMaterial({ map: canvasTex(256, 256, (g, w, h) => paintDesign(g, w, h, L.jacketDesign === 'panels' || L.jacketDesign === 'colorblock' || L.jacketDesign === 'stripes' ? 'solid' : L.jacketDesign, hex(jacket), hex(trim))), roughness: 0.62, sheen: 0.6, sheenRoughness: 0.5, sheenColor: new THREE.Color(0xffffff), ...env }),
+    sleeve: new THREE.MeshPhysicalMaterial({ map: canvasTex(256, 256, (g, w, h) => paintDesign(g, w, h, L.jacketDesign === 'panels' || L.jacketDesign === 'colorblock' || L.jacketDesign === 'stripes' ? 'solid' : L.jacketDesign, hex(jacket), hex(trim))), roughness: 0.62, sheen: 0.6, sheenRoughness: 0.5, sheenColor: new THREE.Color(0xffffff), side: THREE.DoubleSide, ...env }),
     trim: new THREE.MeshStandardMaterial({ color: trim, roughness: 0.7 }),
-    pants: new THREE.MeshPhysicalMaterial({ map: pantsTexture(L.pantsDesign, pants, trim), roughness: 0.85, sheen: 0.4, sheenRoughness: 0.6, sheenColor: new THREE.Color(0x8899aa) }),
-    bootShell: new THREE.MeshStandardMaterial({ color: 0xf0f2f4, roughness: 0.3, metalness: 0.05, ...env }),
+    // Knit face mask / neck gaiter: matte, slightly fuzzy.
+    gaiter: new THREE.MeshPhysicalMaterial({ color: L.gaiter || trim, roughness: 0.95, sheen: 1, sheenRoughness: 0.8, sheenColor: new THREE.Color(0x3a3d42) }),
+    pants: new THREE.MeshPhysicalMaterial({ map: pantsTexture(L.pantsDesign, pants, trim), roughness: 0.85, sheen: 0.4, sheenRoughness: 0.6, sheenColor: new THREE.Color(0x8899aa), side: THREE.DoubleSide }),
+    bootShell: new THREE.MeshStandardMaterial({ color: L.boot, roughness: 0.32, metalness: 0.05, ...env }),
     bootDark: new THREE.MeshStandardMaterial({ color: 0x1c1f23, roughness: 0.45 }),
     buckle: new THREE.MeshStandardMaterial({ color: 0xc0c6cc, roughness: 0.25, metalness: 0.9, ...env }),
     skiBase: new THREE.MeshStandardMaterial({ color: 0x15171a, roughness: 0.3 }),
@@ -347,89 +408,133 @@ export function createSkierModel({ look = {}, envMap = null } = {}) {
   const root = new THREE.Group(); // feet on the snow
   root.name = 'player-skier';
 
-  // --- Feet: ski, binding and boot sole stay flat; the boot cuff and leg
+  // --- Feet: ski, binding and boot shell stay flat; the boot cuff and leg
   // hang off the ankle above.
   const skiGeo = skiGeometry();
   const skiMats = [M.skiEdge, M.skiEdge, M.skiTop, M.skiBase, M.skiEdge, M.skiEdge];
   const legs = [];
+  // Pants stack over the boot: the baggier the fit, the lower the hem sits.
+  const hemY = pf > 1.3 ? -0.075 : pf > 1.1 ? -0.055 : pf > 0.95 ? -0.03 : 0.03;
   for (const side of [-1, 1]) {
     const foot = joint(root, side * STANCE, 0, 0);
     const ski = mesh(skiGeo, skiMats, foot, 0, 0.012, 0.04);
-    // Binding: toe piece, heel piece and a plate.
-    mesh(new THREE.BoxGeometry(0.07, 0.022, 0.5), M.binding, ski, 0, 0.018, -0.02);
-    mesh(new THREE.BoxGeometry(0.08, 0.05, 0.09), M.binding, ski, 0, 0.045, 0.17);
-    mesh(new THREE.BoxGeometry(0.085, 0.07, 0.11), M.binding, ski, 0, 0.055, -0.21);
-    mesh(new THREE.BoxGeometry(0.03, 0.012, 0.11), M.bindingHi, ski, 0, 0.092, -0.21);
-    // Brakes, tucked up.
+    // Binding: plate, toe piece, heel piece with its accent, tucked brakes.
+    mesh(softBox(0.072, 0.02, 0.5, 0.006, 1), M.binding, ski, 0, 0.018, -0.02);
+    mesh(softBox(0.082, 0.05, 0.09, 0.015, 2), M.binding, ski, 0, 0.045, 0.18);
+    mesh(softBox(0.086, 0.072, 0.115, 0.018, 2), M.binding, ski, 0, 0.056, -0.215);
+    mesh(new THREE.BoxGeometry(0.03, 0.012, 0.11), M.bindingHi, ski, 0, 0.094, -0.215);
     for (const s of [-1, 1]) mesh(new THREE.BoxGeometry(0.008, 0.008, 0.12), M.binding, ski, s * 0.05, 0.03, -0.13);
-    // Boot sole and lower shell, flat on the binding.
-    const sole = mesh(new THREE.BoxGeometry(0.11, 0.04, 0.32), M.bootDark, foot, 0, 0.065, 0.03);
-    const shell = mesh(new THREE.SphereGeometry(0.5, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2).scale(0.12, 0.13, 0.33), M.bootShell, foot, 0, 0.08, 0.03);
-    void sole;
-    void shell;
+    // Boot: a dark rubber sole with toe and heel lugs under a rounded shell.
+    mesh(softBox(0.108, 0.035, 0.315, 0.01, 2), M.bootDark, foot, 0, 0.055, 0.03);
+    mesh(softBox(0.114, 0.1, 0.3, 0.04, 3).translate(0, 0, 0), M.bootShell, foot, 0, 0.1, 0.035);
+    mesh(softBox(0.06, 0.03, 0.06, 0.012, 2), M.bootDark, foot, 0, 0.06, 0.185); // toe lug
+    // Instep buckles across the top of the foot.
+    for (const z of [0.07, 0.13]) mesh(softBox(0.1, 0.012, 0.022, 0.005, 1), M.buckle, foot, 0, 0.148, z);
 
     const ankle = joint(foot, 0, ANKLE_Y, 0);
-    // Boot cuff with two buckles, flexing with the shin.
-    const cuff = mesh(new THREE.CylinderGeometry(0.068, 0.078, 0.24, 14).translate(0, 0.06, 0.0), M.bootShell, ankle);
-    void cuff;
-    for (const [y, z] of [[0.0, 0.07], [0.1, 0.066]]) {
-      mesh(new THREE.BoxGeometry(0.05, 0.016, 0.02), M.buckle, ankle, 0, y, z + 0.012);
-    }
-    mesh(new THREE.BoxGeometry(0.12, 0.012, 0.02), M.bindingHi, ankle, 0, 0.16, 0.0); // power strap edge
-    // Shin: baggy pants over the boot.
-    // Baggy pants pool over the boot and hang wide; slim ones hug the cuff.
-    const cuffY = pf > 1.1 ? 0.03 : 0.1;
-    mesh(lathe([[0.096 * pf * 1.04, cuffY], [0.104 * pf, 0.16], [0.097 * pf, 0.32], [0.09 * pf, SHIN], [0.07 * pf, SHIN + 0.05]]), M.pants, ankle);
+    // Cuff (oval, a touch taller at the back) and the tongue up the front.
+    mesh(new THREE.CylinderGeometry(0.07, 0.078, 0.25, 18).scale(1, 1, 1.18).translate(0, 0.055, -0.005), M.bootShell, ankle);
+    mesh(softBox(0.07, 0.22, 0.03, 0.012, 2), M.bootDark, ankle, 0, 0.07, 0.085);
+    for (const y of [0.0, 0.09]) mesh(softBox(0.06, 0.014, 0.022, 0.005, 1), M.buckle, ankle, side * 0.03, y, 0.08);
+    mesh(new THREE.CylinderGeometry(0.083, 0.083, 0.035, 18, 1, true).scale(1, 1, 1.18), M.bindingHi, ankle, 0, 0.17, -0.005); // power strap
+
+    // Shin: loose pant leg flaring over the boot, with a couple of stacked
+    // folds just above the hem.
+    mesh(
+      garment(
+        [[0.118, hemY], [0.124, hemY + 0.03], [0.112, hemY + 0.065], [0.12, hemY + 0.1], [0.108, 0.13], [0.104, 0.24], [0.098, 0.36], [0.095, SHIN], [0.088, SHIN + 0.06]].map(([r, y]) => [r * pf, y]),
+        { sz: 1.06, wrinkle: 0.045, seed: side * 3 + 1 },
+      ),
+      M.pants,
+      ankle,
+    );
     const knee = joint(ankle, 0, SHIN, 0);
-    mesh(new THREE.SphereGeometry(0.094 * pf, 14, 10), M.pants, knee);
-    mesh(lathe([[0.075 * pf, -0.02], [0.095 * pf, 0.04], [0.112 * pf, 0.25], [0.12 * Math.sqrt(pf), THIGH - 0.02], [0.1 * Math.sqrt(pf), THIGH + 0.05]]), M.pants, knee);
+    mesh(new THREE.SphereGeometry(0.1 * pf, 18, 12).scale(1, 1, 1.08), M.pants, knee, 0, 0, 0.004);
+    // Thigh: tapering up into the seat, roomy at the top.
+    const tp = Math.sqrt(pf);
+    mesh(
+      garment([[0.096 * pf, -0.04], [0.104 * pf, 0.06], [0.115 * pf, 0.2], [0.128 * tp, 0.35], [0.134 * tp, THIGH - 0.01], [0.118 * tp, THIGH + 0.06]], {
+        sz: 1.04,
+        wrinkle: 0.035,
+        seed: side * 5 + 2,
+      }),
+      M.pants,
+      knee,
+    );
     legs.push({ foot, ski, ankle, knee, side });
   }
 
   // --- Torso from the hips, with the head and arms.
   const hips = joint(root, 0, HIP_AIR, 0);
-  mesh(new THREE.SphereGeometry(0.16 * Math.sqrt(pf), 16, 12).scale(1.15, 0.85, 0.95), M.pants, hips);
+  // Seat of the pants, a little wider than deep.
+  const sp = Math.sqrt(pf);
+  mesh(garment([[0.0, -0.13], [0.12 * sp, -0.115], [0.16 * sp, -0.05], [0.162 * sp, 0.03], [0.14 * sp, 0.1], [0.0, 0.12]], { sx: 1.1, sz: 0.8, rings: 16 }), M.pants, hips);
   const spine = joint(hips, 0, 0.04, 0);
-  // The shell: hem below the hips, chest, shoulders, collar.
-  const shellGeo = lathe(
-    [[0.0, -0.17 - fit.hem], [0.195 * jf + 0.01 * (jf - 1), -0.165 - fit.hem], [0.205 * jf, -0.1], [0.19 * jf, 0.04], [0.192 * jf, 0.18], [0.205 * jf, 0.32], [0.208 * jf, 0.42], [0.18 * jf, 0.5], [0.12, 0.555], [0.0, 0.565]],
-    22,
-  ).scale(1.0, 1, 0.74);
-  mesh(shellGeo, M.jacket, spine);
-  // Collar and the hood bunched behind the neck.
-  mesh(new THREE.CylinderGeometry(0.085, 0.1, 0.11, 16, 1, true), M.trim, spine, 0, TORSO + 0.02, 0.005).material = M.trim;
-  mesh(new THREE.TorusGeometry(0.085, 0.03, 8, 16, Math.PI).rotateX(Math.PI / 2 + 0.25), M.trim, spine, 0, TORSO - 0.01, -0.02);
+  // Jacket shell: a long, boxy cut that hangs over the seat with a slight
+  // flare at the hem, broad dropped shoulders, chest a little forward.
+  const hem = -0.25 - fit.hem;
+  const shoulderW = (y) => 1 + 0.14 * THREE.MathUtils.smoothstep(y, 0.05, 0.42) - 0.12 * THREE.MathUtils.smoothstep(y, 0.47, 0.56);
+  const depth = (y) => 0.74 + 0.12 * (1 - THREE.MathUtils.smoothstep(y, 0.0, 0.2));
+  mesh(
+    garment(
+      [[0.222 * jf, hem], [0.226 * jf, hem + 0.035], [0.214 * jf, hem + 0.09], [0.208 * jf, -0.04], [0.204 * jf, 0.1], [0.21 * jf, 0.24], [0.215 * jf, 0.36], [0.208 * jf, 0.45], [0.17 * jf, 0.515], [0.11, 0.55], [0.085, 0.56]],
+      { segs: 28, rings: 40, sx: shoulderW, sz: depth, wrinkle: 0.025, seed: 9 },
+    ),
+    M.jacket,
+    spine,
+  );
+  // Funnel collar zipped to the chin.
+  mesh(garment([[0.1, -0.02], [0.098, 0.05], [0.104, 0.11], [0.108, 0.12]], { sz: 1.02, rings: 8, segs: 20 }), M.sleeve, spine, 0, TORSO - 0.01, 0.01);
+  // Hood down: bunched on the shoulders behind the collar.
+  if (L.hood !== 'up') {
+    mesh(new THREE.TorusGeometry(0.1, 0.045, 10, 18, Math.PI * 1.1).rotateX(Math.PI / 2 + 0.35).rotateY(Math.PI - 0.15 * Math.PI), M.sleeve, spine, 0, TORSO + 0.005, -0.04);
+    mesh(new THREE.SphereGeometry(0.1, 16, 10).scale(1.25, 0.55, 0.6), M.sleeve, spine, 0, TORSO - 0.03, -0.12);
+  }
   const neck = joint(spine, 0, TORSO + 0.03, 0.01);
   const head = new THREE.Group();
   neck.add(head);
-  mesh(new THREE.SphereGeometry(0.1, 16, 12).scale(0.92, 1.1, 1.0), M.skin, head, 0, 0.1, 0.012);
-  mesh(new THREE.CylinderGeometry(0.09, 0.098, 0.075, 16), M.trim, head, 0, 0.005, 0.005); // gaiter
-  const helm = mesh(new THREE.SphereGeometry(0.135, 22, 14, 0, Math.PI * 2, 0, Math.PI * 0.6).scale(1.0, 0.98, 1.12), M.helmet, head, 0, 0.115, -0.005);
-  void helm;
-  // Ear pads and a vent ridge.
-  for (const s of [-1, 1]) mesh(new THREE.SphereGeometry(0.05, 10, 8).scale(0.5, 1, 1), M.helmet, head, s * 0.125, 0.085, -0.01);
-  for (const x of [-0.04, 0, 0.04]) mesh(new THREE.BoxGeometry(0.014, 0.012, 0.14), M.trim, head, x, 0.245, -0.005);
-  // Goggles: frame, mirrored lens, strap round the back of the helmet.
-  mesh(new THREE.CylinderGeometry(0.139, 0.139, 0.082, 24, 1, true, -1.05, 2.1), M.frame, head, 0, 0.12, 0.012);
-  mesh(new THREE.CylinderGeometry(0.143, 0.141, 0.064, 24, 1, true, -0.92, 1.84), M.lens, head, 0, 0.12, 0.012);
-  mesh(new THREE.CylinderGeometry(0.146, 0.146, 0.04, 24, 1, true, 1.0, Math.PI * 2 - 2.0), M.strap, head, 0, 0.13, -0.005);
+  mesh(new THREE.SphereGeometry(0.1, 18, 14).scale(0.92, 1.1, 1.0), M.skin, head, 0, 0.1, 0.012);
+  // Face mask pulled up to the goggles.
+  mesh(garment([[0.098, -0.03], [0.1, 0.02], [0.104, 0.07], [0.095, 0.1], [0.07, 0.12]], { sz: 1.08, rings: 12, segs: 20, wrinkle: 0.03, seed: 4 }), M.gaiter, head, 0, 0, 0.012);
+  // Helmet: low-profile shell dropping over the ears, with a small brim.
+  mesh(new THREE.SphereGeometry(0.138, 28, 16, 0, Math.PI * 2, 0, Math.PI * 0.56).scale(1.0, 0.94, 1.12), M.helmet, head, 0, 0.12, -0.008);
+  for (const s of [-1, 1]) mesh(new THREE.SphereGeometry(0.06, 14, 10).scale(0.42, 1, 1.05), M.helmet, head, s * 0.128, 0.09, -0.015);
+  mesh(new THREE.CylinderGeometry(0.152, 0.155, 0.014, 28, 1, false, -0.85, 1.7).scale(1, 1, 1.12), M.helmet, head, 0, 0.185, -0.008);
+  // Big frameless spherical goggles, wider than the face, strap round the helmet.
+  const gy = 0.125;
+  mesh(sphereBand(0.148, Math.PI / 2 - 1.2, 2.4, Math.PI / 2 - 0.33, 0.66).scale(1.05, 1, 1.16), M.frame, head, 0, gy, 0.0);
+  mesh(sphereBand(0.152, Math.PI / 2 - 1.12, 2.24, Math.PI / 2 - 0.29, 0.58).scale(1.05, 1, 1.16), M.lens, head, 0, gy, 0.0);
+  mesh(new THREE.CylinderGeometry(0.145, 0.145, 0.042, 28, 1, true, 1.2, Math.PI * 2 - 2.4).scale(1.02, 1, 1.12), M.strap, head, 0, gy + 0.008, -0.008);
+  // Hood up, over the helmet: open at the face.
+  if (L.hood === 'up') {
+    mesh(
+      new THREE.SphereGeometry(0.168, 28, 16, Math.PI / 2 + 0.95, Math.PI * 2 - 1.9, 0, Math.PI * 0.78).scale(1.04, 1.02, 1.1),
+      M.sleeve,
+      head,
+      0,
+      0.115,
+      -0.012,
+    );
+    mesh(garment([[0.15, -0.08], [0.16, 0.0], [0.16, 0.06]], { sx: 1.1, sz: 1.05, rings: 6, segs: 22, wrinkle: 0.05, seed: 7 }), M.sleeve, head, 0, 0.0, -0.03);
+  }
 
   // --- Arms: shoulder -> upper arm -> elbow -> forearm -> hand.
   const arms = [];
   for (const side of [-1, 1]) {
     const shoulder = joint(spine, side * 0.2, TORSO - 0.1, -0.005);
-    mesh(new THREE.SphereGeometry(0.078 * jf, 14, 10), M.sleeve, shoulder);
-    const upper = mesh(lathe([[0.066 * jf, 0.0], [0.074 * jf, 0.06], [0.07 * jf, UPPER_ARM - 0.02], [0.062 * jf, UPPER_ARM + 0.03]], 12), M.sleeve, shoulder);
+    mesh(new THREE.SphereGeometry(0.088 * jf, 18, 12), M.sleeve, shoulder);
+    const upper = mesh(garment([[0.084 * jf, -0.02], [0.082 * jf, 0.08], [0.076 * jf, UPPER_ARM - 0.02], [0.07 * jf, UPPER_ARM + 0.03]], { wrinkle: 0.05, seed: side * 2 + 11, segs: 18, rings: 16 }), M.sleeve, shoulder);
     upper.rotation.x = Math.PI; // hangs down from the shoulder
     const elbow = joint(shoulder, 0, -UPPER_ARM, 0);
-    mesh(new THREE.SphereGeometry(0.064 * jf, 12, 8), M.sleeve, elbow);
-    const fore = mesh(lathe([[0.058 * jf, 0.0], [0.064 * jf, 0.05], [0.058 * jf, FOREARM - 0.06], [0.07 * jf, FOREARM - 0.03], [0.05, FOREARM]], 12), M.sleeve, elbow);
+    mesh(new THREE.SphereGeometry(0.071 * jf, 16, 10), M.sleeve, elbow);
+    // Forearm, ending in a roomy cuff pulled over the glove's gauntlet.
+    const fore = mesh(garment([[0.068 * jf, -0.01], [0.07 * jf, 0.06], [0.064 * jf, FOREARM - 0.08], [0.074 * jf, FOREARM - 0.03], [0.072 * jf, FOREARM - 0.005]], { wrinkle: 0.06, seed: side * 2 + 13, segs: 18, rings: 16 }), M.sleeve, elbow);
     fore.rotation.x = Math.PI;
     const hand = joint(elbow, 0, -FOREARM, 0);
-    // Gauntlet glove: cuff, mitt and thumb.
-    mesh(new THREE.CylinderGeometry(0.062, 0.058, 0.08, 12), M.glove, hand, 0, 0.02, 0);
-    mesh(new THREE.SphereGeometry(0.052, 12, 10).scale(0.85, 1.3, 1.1), M.glove, hand, 0, -0.06, 0.005);
-    mesh(new THREE.SphereGeometry(0.022, 8, 6).scale(1, 1.6, 1), M.glove, hand, -side * 0.035, -0.04, 0.03);
+    // Mitt: gauntlet, a soft rounded mitt and a thumb.
+    mesh(new THREE.CylinderGeometry(0.06, 0.054, 0.08, 14), M.glove, hand, 0, 0.015, 0);
+    mesh(softBox(0.085, 0.12, 0.065, 0.03, 3), M.glove, hand, 0, -0.06, 0.008);
+    mesh(new THREE.CapsuleGeometry(0.018, 0.04, 4, 8).rotateZ(side * 0.5), M.glove, hand, -side * 0.04, -0.04, 0.03);
     // Pole: grip in the hand, tapered shaft, basket near the tip.
     const pole = new THREE.Group();
     pole.position.set(0, -0.06, 0.01);

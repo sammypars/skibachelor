@@ -12,12 +12,15 @@ const SWATCHES = {
   pants: ['#24282e', '#131416', '#3d4a5c', '#1f3d2b', '#6b5a3a', '#c9b48a', '#f3f4f2', '#ff5a1f', '#1d5fa8', '#7b2ff7'],
   trim: ['#131416', '#f3f4f2', '#ffc20e', '#ff5a1f', '#1d5fa8', '#2fbf71', '#e6194b', '#7b2ff7'],
   helmet: ['#f4f6f8', '#131416', '#ffc20e', '#e6194b', '#1d5fa8', '#2fbf71', '#8a8f96', '#ff7eb6'],
+  boot: ['#2a2e34', '#f0f2f4', '#8a8f96', '#1d5fa8', '#e6194b', '#ffc20e'],
+  gaiter: ['#131416', '#f3f4f2', '#8a8f96', '#6b7f3a', '#e6194b', '#1d5fa8', '#ff7eb6'],
   skiColor: ['#ffc20e', '#ff5a1f', '#e6194b', '#19b6c9', '#2fbf71', '#f3f4f2', '#7b2ff7'],
 };
 const CHOICES = {
   fit: [['slim', 'Slim'], ['regular', 'Regular'], ['baggy', 'Baggy'], ['xxl', 'XXL']],
   jacketDesign: [['panels', 'Panels'], ['solid', 'Solid'], ['colorblock', 'Colour block'], ['camo', 'Camo'], ['check', 'Flannel'], ['stripes', 'Stripes'], ['fade', 'Fade']],
   pantsDesign: [['solid', 'Solid'], ['cargo', 'Cargo'], ['camo', 'Camo'], ['check', 'Flannel'], ['stripes', 'Stripes']],
+  hood: [['down', 'Down'], ['up', 'Up over the helmet']],
   lens: [['sunset', 'Sunset'], ['ice', 'Ice'], ['gold', 'Gold'], ['smoke', 'Smoke'], ['emerald', 'Emerald']],
   skiDesign: [['chevron', 'Chevron'], ['stripe', 'Racing stripe'], ['flames', 'Flames'], ['checker', 'Checker'], ['wood', 'Woodgrain']],
 };
@@ -113,7 +116,10 @@ export function createRiderPanel({ onOpen, onClose } = {}) {
     colorRow('pants', 'Pants'),
     chipRow('pantsDesign', 'Pants design'),
     colorRow('helmet', 'Helmet'),
+    chipRow('hood', 'Hood'),
+    colorRow('gaiter', 'Face mask'),
     chipRow('lens', 'Goggle lens'),
+    colorRow('boot', 'Boots'),
     chipRow('skiDesign', 'Ski graphic'),
     colorRow('skiColor', 'Ski colour'),
   ];
@@ -130,6 +136,9 @@ export function createRiderPanel({ onOpen, onClose } = {}) {
       pants: pick(SWATCHES.pants),
       pantsDesign: pick(CHOICES.pantsDesign)[0],
       helmet: pick(SWATCHES.helmet),
+      hood: pick(CHOICES.hood)[0],
+      gaiter: pick(SWATCHES.gaiter),
+      boot: pick(SWATCHES.boot),
       lens: pick(CHOICES.lens)[0],
       skiDesign: pick(CHOICES.skiDesign)[0],
       skiColor: pick(SWATCHES.skiColor),

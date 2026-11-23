@@ -1084,7 +1084,19 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
     fall.dir.applyAxisAngle(UP, fall.spin * dt);
     if (sp > 2 && Math.random() < dt * 30) spray.emit(pos, tmp2.copy(vel).multiplyScalar(0.2), 2, 2, 1);
     fall.still = sp < 0.4 ? fall.still + dt : 0;
-    if (fall.still > 1.8 || fall.t > 6) respawn();
+    if (fall.t >= GET_UP) getUp();
+  }
+
+  // Three seconds after a crash the rider gets back up right where they
+  // came to rest, skis back on, pointed the way they were sliding.
+  const GET_UP = 3;
+  function getUp() {
+    pos.y = surfaceAt(pos.x, pos.z);
+    const sp = Math.hypot(vel.x, vel.z);
+    yaw = sp > 0.5 ? Math.atan2(vel.x, vel.z) : Math.atan2(fall.dir.x, fall.dir.z);
+    vel.multiplyScalar(0.3);
+    reset();
+    groundQuat(quat);
   }
 
   // Orientation lying in the snow: feet first down the slide, on the back,
