@@ -785,6 +785,39 @@ body.flying #panel:hover {
 .ski-live.show {
   opacity: 1;
 }
+.ski-speedcheck {
+  position: absolute;
+  left: 50%;
+  bottom: 146px;
+  transform: translate(-50%, 6px);
+  padding: 5px 14px;
+  border-radius: 999px;
+  background: var(--glass-strong);
+  border: 1px solid var(--stroke);
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.25s var(--ease);
+}
+.ski-speedcheck.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+.ski-speedcheck.fast {
+  color: #ff8a80;
+  border-color: rgba(255, 138, 128, 0.5);
+}
+.ski-speedcheck.slow {
+  color: #8ec5ff;
+  border-color: rgba(142, 197, 255, 0.5);
+}
+.ski-speedcheck.ok {
+  color: #7be495;
+  border-color: rgba(123, 228, 149, 0.5);
+}
 .ski-loadbar {
   transition: opacity 0.15s;
   position: absolute;
@@ -901,7 +934,7 @@ body.skiing .credit {
 .ski-prompt {
   position: absolute;
   left: 50%;
-  bottom: 156px;
+  bottom: 190px;
   transform: translateX(-50%);
   pointer-events: auto;
   background: var(--glass-strong);

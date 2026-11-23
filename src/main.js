@@ -584,7 +584,7 @@ function frame() {
   }
 
   lifts.update(dt, chairsRunning);
-  if (people.group.visible) people.update(chairsRunning ? dt : 0);
+  if (people.group.visible) people.update(chairsRunning ? dt : 0, camera.position);
 
   if (ride) {
     const l = ride.lift;

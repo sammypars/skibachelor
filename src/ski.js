@@ -169,6 +169,11 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
   let absorb = 0; // landing compression, springs back
   let airBlend = 0;
   let wobble = 0;
+  let lastLanding = null; // the numbers behind the last touchdown, for debugging
+  let landPivot = 0; // leftover spin skidding the skis round after a landing (rad/s)
+  let check = 0; // sitting back after a heavy or under-rotated landing: hand drag, butt check
+  let checkSide = 1;
+  let landTilt = 0; // body pitch off the snow at touchdown (+ nose-heavy, - backseat), settling out
   let shake = 0;
   let trackBreak = true;
   let nearLift = null;
@@ -282,6 +287,30 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
     if (chair) skipLift();
     else if (nearLift) boardLift(nearLift);
   });
+  // Speed check: approaching a kicker, how your speed compares with the
+  // speed it was built for (what a coach at the side of the jump would call).
+  let checkEl = hud.querySelector('.ski-speedcheck');
+  if (!checkEl) {
+    checkEl = document.createElement('div');
+    checkEl.className = 'ski-speedcheck';
+    hud.appendChild(checkEl);
+  }
+  let checkState = '';
+  function kickerAhead() {
+    const vh = Math.hypot(vel.x, vel.z);
+    if (vh < 2) return null;
+    for (const k of kickers) {
+      const dx = k.lipPos.x - pos.x;
+      const dz = k.lipPos.z - pos.z;
+      const along = (dx * vel.x + dz * vel.z) / vh;
+      if (along < 3 || along > 45) continue;
+      const across = Math.abs(dx * vel.z - dz * vel.x) / vh;
+      if (across > k.halfWidth + 1) continue;
+      if ((vel.x * k.lipDir.x + vel.z * k.lipDir.z) / vh < 0.8) continue;
+      return k;
+    }
+    return null;
+  }
   let liveEl = hud.querySelector('.ski-live');
   if (!liveEl) {
     liveEl = document.createElement('div');
@@ -302,6 +331,7 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
     nForce = G;
     gLoad = 1;
     wobble = airBlend = 0;
+    landPivot = check = landTilt = 0;
     trackBreak = true;
   }
   function start(at, heading) {
@@ -470,6 +500,14 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
       }
     }
     if (!butter && Math.abs(butterSpin) > 0.2) endButter();
+    // Spin left over from the air keeps the skis turning until the edges
+    // bite and stop it, scrubbing speed and throwing snow.
+    if (Math.abs(landPivot) > 0.05) {
+      w += landPivot;
+      landPivot *= Math.exp(-dt * 5.5);
+      vel.multiplyScalar(1 - Math.min(0.5, Math.abs(landPivot) * 0.03) * dt * 4);
+      if (speed > 2 && Math.random() < dt * 40) spray.emit(pos, tmp2.copy(r).multiplyScalar(-Math.sign(landPivot) * 3).addScaledVector(vel, 0.3), 3, 1.2, 1.2);
+    } else landPivot = 0;
     yaw += w * dt;
     yawRate += (w - yawRate) * Math.min(1, dt * 20);
     basis();
@@ -747,17 +785,41 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
     }
   }
 
+  // Where on a jump you came down: on the table short of the knuckle
+  // (cased), on the knuckle itself, or on the sweet spot of the landing.
+  function landingZone() {
+    for (const k of kickers) {
+      const dx = pos.x - k.lipPos.x;
+      const dz = pos.z - k.lipPos.z;
+      const along = dx * k.lipDir.x + dz * k.lipDir.z;
+      const across = Math.abs(dx * k.lipDir.z - dz * k.lipDir.x);
+      const knuckle = k.prof.knuckle - k.prof.lip.x;
+      const end = k.prof.length - k.prof.lip.x;
+      if (across > k.halfWidth + 1 || along < -0.5 || along > end + 30) continue;
+      if (along > end) return 'flat'; // overshot the landing onto the run-out
+      if (along < knuckle - 1.2) return 'cased';
+      if (along < knuckle + 1.2) return 'knuckle';
+      const sweet = k.prof.sweet - k.prof.lip.x;
+      if (Math.abs(along - sweet) < Math.max(2.5, 0.25 * (end - knuckle))) return 'sweet';
+      return 'landing';
+    }
+    return null;
+  }
+
   function land() {
     normalAt(pos.x, pos.z);
     const vt = vel.clone().addScaledVector(n, -vel.dot(n));
     const sp = vt.length();
     const impact = -vel.dot(n);
-    const fl = ((air.flip % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-    const flipOff = Math.min(fl, 2 * Math.PI - fl);
+    // Pitch error at touchdown, signed: + tips down (over-rotated forward),
+    // - leaning back (short of a backflip, or sitting back).
+    const fe = Math.atan2(Math.sin(air.flip), Math.cos(air.flip)) + air.tilt;
+    const flipOff = Math.abs(fe);
     const fwd = new THREE.Vector3(Math.sin(air.heading), 0, Math.cos(air.heading));
     let off = 0;
     if (sp > 1) off = Math.acos(Math.min(1, Math.abs(fwd.dot(tmp.copy(vt).setY(0).normalize()))));
     const switchLand = fwd.dot(vt) < 0;
+    const residual = spinVel; // spin still going at touchdown (rad/s)
     audio.thump(impact / 10);
 
     // Tiny hops over rollers: just keep riding.
@@ -770,40 +832,65 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
       yawRate = 0;
       return;
     }
-    if (flipOff > 0.9) return crash(flipOff > 2 ? 'Head first!' : 'Under-rotated!');
+    const zone = landingZone();
+    lastLanding = { impact: +impact.toFixed(2), zone, fe: +fe.toFixed(2), off: +off.toFixed(2), residual: +residual.toFixed(2), airtime: +air.t.toFixed(2) };
+    if (flipOff > 0.9) return crash(flipOff > 2 ? 'Head first!' : fe < 0 ? 'Under-rotated!' : 'Over-rotated!');
     if (off > 1.05 && sp > 4) return crash('Sideways!');
-    if (impact > 14) return crash('Flat landing!');
+    if (Math.abs(residual) > 6 && off > 0.45) return crash('Over-rotated!');
+    if (impact > 14 || (zone === 'cased' && impact > 11)) return crash(zone === 'cased' ? 'Cased it!' : 'Flat landing!');
 
-    // Land with the skis lined up exactly; the travel follows the skis.
+    // The skis meet the snow where they point; the travel carries on and
+    // the edges bring the two back together (a skid if they're far apart).
     yaw = air.heading;
     vel.copy(vt);
-    const clean = off < 0.42 && flipOff < 0.4 && impact < 11;
-    if (!clean) {
-      vel.multiplyScalar(0.72);
-      wobble = 1;
+    // Spin you didn't stop before touchdown carries on as a skid.
+    landPivot = Math.abs(residual) > 0.8 ? THREE.MathUtils.clamp(residual * 0.45, -2.6, 2.6) : 0;
+    const hard = zone === 'cased' || zone === 'knuckle' ? impact * 1.25 : zone === 'flat' ? impact * 1.15 : impact;
+    const clean = off < 0.42 && flipOff < 0.4 && hard < 11 && Math.abs(residual) < 2.4;
+    const stomped = clean && off < 0.2 && flipOff < 0.2 && hard < 7 && Math.abs(residual) < 1.2 && (zone === 'sweet' || zone === 'landing' || !zone);
+    // Sitting back: a heavy hit or landing short of the flip puts the hips
+    // behind the feet; a hand drags the snow (or the seat of the pants).
+    const sitBack = hard > 9.5 || fe < -0.32;
+    if (sitBack) {
+      check = Math.min(1, 0.55 + Math.max(0, hard - 9.5) * 0.12 + Math.max(0, -fe - 0.32) * 1.2);
+      checkSide = residual ? -Math.sign(residual) : Math.random() < 0.5 ? -1 : 1;
+      vel.multiplyScalar(check > 0.85 ? 0.6 : 0.8);
     }
-    if (impact > 8) vel.multiplyScalar(0.88);
+    landTilt = THREE.MathUtils.clamp(fe, -0.8, 0.8);
+    if (!clean) {
+      vel.multiplyScalar(0.8);
+      wobble = Math.min(1, 0.5 + flipOff + off * 0.6);
+    }
+    if (zone === 'cased') vel.multiplyScalar(0.75);
+    if (impact > 8) vel.multiplyScalar(0.9);
     onGround = true;
     lean = 0;
     edge = 0;
-    yawRate = 0;
+    yawRate = landPivot;
     // Knees soak it up; a puff of snow; the camera feels it.
-    absorb = Math.min(1, impact / 8);
-    shake = Math.min(0.35, impact * 0.025);
-    spray.emit(pos, tmp2.copy(vt).multiplyScalar(0.4), Math.round(8 + impact * 3), 3, 1.6);
+    absorb = Math.min(1, hard / 8);
+    shake = Math.min(0.4, hard * 0.028);
+    spray.emit(pos, tmp2.copy(vt).multiplyScalar(0.4), Math.round(8 + hard * 3), 3, 1.6);
     const name = trickName(air.spin, air.flip, air.grabs, { switchTakeoff: air.switchTakeoff, butter: air.butter });
     const airtime = air.t;
+    const missed = { cased: 'Cased', flat: 'Overshot', knuckle: 'Knuckled' }[zone];
+    let how = 'Sketchy';
+    if (stomped) how = 'Stomped';
+    else if (clean) how = switchLand ? 'Clean · rides out switch' : 'Clean';
+    else if (check > 0.85) how = 'Butt check';
+    else if (check > 0) how = 'Hand drag';
+    else if (missed) how = missed;
+    else if (Math.abs(residual) >= 2.4) how = 'Over-rotated';
+    const mult = stomped ? 1.25 : clean ? 1 : check > 0.85 ? 0.35 : 0.5;
     if (name) {
       let pts = trickPoints(air.spin, air.flip, air.grabs, air.switchTakeoff);
-      if (clean) pts += 600;
-      else pts = Math.round(pts * 0.5);
+      pts = Math.round(pts * mult) + (stomped ? 1000 : clean ? 600 : 0);
       score += pts;
-      const how = clean ? (switchLand ? 'Clean · rides out switch' : 'Clean') : 'Sketchy';
       toast(name, `${how} · +${pts.toLocaleString()} · ${airtime.toFixed(1)}s air`);
     } else if (airtime > 0.7) {
-      const pts = Math.round(airtime * 150);
+      const pts = Math.round(airtime * 150 * mult) + (stomped ? 300 : 0);
       score += pts;
-      toast(clean ? 'Straight air' : 'Sketchy', `+${pts} · ${airtime.toFixed(1)}s air`);
+      toast(stomped ? 'Stomped' : clean ? 'Straight air' : how, `+${pts} · ${airtime.toFixed(1)}s air`);
     }
     air = null;
     spinVel = flipVel = 0;
@@ -1195,6 +1282,8 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
     absorb *= Math.exp(-dt * 5);
     shake *= Math.exp(-dt * 6);
     wobble *= Math.exp(-dt * 2.2);
+    check *= Math.exp(-dt * (onGround ? 1.4 : 6));
+    landTilt *= Math.exp(-dt * 3.5);
     plant[1] = Math.max(0, plant[1] - dt * 3);
     plant[-1] = Math.max(0, plant[-1] - dt * 3);
 
@@ -1214,10 +1303,19 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
     airBlend += ((inAir ? 1 : 0) - airBlend) * Math.min(1, dt * (inAir ? 6 : 14));
     // In the air: knees come up for grabs and big rotations, legs reach for
     // the snow just before touchdown.
+    // The body's shape is what sets the spin rate (see rotate()): tucked
+    // tight it whips round, opened out it slows to spot the landing.
     let foldT = 0;
+    let tuckK = 0;
+    let openK = 0;
     if (inAir) {
       const rot = Math.min(1, (Math.abs(spinVel) + Math.abs(flipVel)) / 6);
-      foldT = air.tl < 0.22 ? 0 : 0.15 + 0.35 * rot;
+      const I = Math.min(air.Is, air.If);
+      tuckK = THREE.MathUtils.clamp((1.15 - I) / 0.3, 0, 1);
+      openK = THREE.MathUtils.clamp((Math.max(air.Is, air.If) - 1.1) / 0.5, 0, 1);
+      // Tall off the lip (the pop), then knees up; legs reach for the snow
+      // just before touchdown.
+      foldT = air.t < 0.14 || air.tl < 0.22 ? 0 : 0.12 + 0.3 * rot + 0.45 * tuckK - 0.12 * openK;
     }
     foldNow += (foldT - foldNow) * Math.min(1, dt * 7);
     const grabbing = inAir && air.grab && air.holding && air.tl > 0.15;
@@ -1237,16 +1335,21 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
         : grind
           ? 0.35
           : onGround
-            ? 0.32 + 0.5 * load + 0.6 * absorb + THREE.MathUtils.clamp((gLoad - 1) * 0.35, -0.15, 0.4) + 0.15 * press
-            : 0.3,
+            ? 0.32 + 0.5 * load + 0.6 * absorb + 0.55 * check + THREE.MathUtils.clamp((gLoad - 1) * 0.35, -0.15, 0.4) + 0.15 * press
+            : air && air.t < 0.14
+              ? 0.05
+              : 0.3,
       tuck,
       fold: foldNow,
       air: crashed > 0 ? Math.max(airBlend, fallK) : airBlend,
       grab: crashed > 0 ? 0 : grabNow,
       grabType: air?.grab || 'mute',
-      airArms: inAir && !grabbing ? Math.min(1, air.t * 3) * 0.55 : grind ? 0.8 : 0,
+      airArms: inAir && !grabbing ? Math.min(1, air.t * 3) * (0.3 + 0.6 * openK) * (1 - 0.6 * tuckK) : grind ? 0.8 : 0,
       lean: onGround ? lean : 0,
-      twist,
+      // Shoulders lead the spin; near the snow they square up to spot it.
+      twist: inAir ? THREE.MathUtils.clamp(spinVel * (air.tl < 0.35 ? -0.04 : 0.07), -0.55, 0.55) : twist,
+      check,
+      checkSide,
       look: inAir ? THREE.MathUtils.clamp(spinVel * 0.12, -0.7, 0.7) : onGround ? THREE.MathUtils.clamp(yawRate * 0.25, -0.5, 0.5) : 0,
       plantL: plantPulse(plant[1]) + Math.max(0, Math.sin(poleT * Math.PI)),
       plantR: plantPulse(plant[-1]) + Math.max(0, Math.sin(poleT * Math.PI)),
@@ -1266,10 +1369,28 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
     }
     pivot.position.copy(centre);
     pivot.quaternion.copy(quat);
+    // Touching down nose-heavy or in the backseat: the body rocks over the
+    // feet and recovers.
+    if (Math.abs(landTilt) > 0.01 && onGround && crashed <= 0) pivot.rotateX(landTilt * 0.45);
     if (wobble > 0.05 && onGround) {
       // A sketchy landing rocks the body.
       pivot.rotateZ(Math.sin(clock * 9) * wobble * 0.12);
       pivot.rotateX(Math.sin(clock * 7.3) * wobble * 0.08);
+    }
+
+    // --- Speed check before a kicker.
+    let want = '';
+    if (onGround && !grind && !chair && crashed <= 0) {
+      const k = kickerAhead();
+      if (k) {
+        const ratio = speed / k.prof.lip.v;
+        want = ratio > 1.15 ? 'fast' : ratio < 0.85 ? 'slow' : 'ok';
+      }
+    }
+    if (want !== checkState) {
+      checkState = want;
+      checkEl.className = `ski-speedcheck ${want}${want ? ' show' : ''}`;
+      if (want) checkEl.textContent = want === 'fast' ? 'Too fast · speed check' : want === 'slow' ? 'Too slow · tuck' : 'Good speed · send it';
     }
 
     // --- Lift prompt.
@@ -1371,7 +1492,7 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
       return quat;
     },
     get state() {
-      return { onGround, crashed, air, grind, chair, score, yaw, nearLift, edge, lean, slip, gLoad };
+      return { onGround, crashed, air, grind, chair, score, yaw, nearLift, edge, lean, slip, gLoad, lastLanding };
     },
   };
 }

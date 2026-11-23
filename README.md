@@ -34,6 +34,17 @@ Skiing:
 - `E` at the bottom of a lift: ride the chair up (`E` again skips to the top).
 - On a phone or tablet, use the on-screen pad and the **POP** button.
 
+Landings are judged where and how you come down. Hit the sweet spot clean
+and it's **Stomped**; come up short on the table and you **Case** it, land
+on the knuckle and you're **Knuckled**, fly past the landing onto the flat
+and you've **Overshot**. Land a little short of a flip or too heavy and you
+sit back into a **Hand drag** or **Butt check**; spin you didn't stop before
+touchdown keeps the skis skidding round. Approaching a kicker, a readout
+tells you whether you're at the speed it was built for (**Too fast · speed
+check**, **Good speed**, **Too slow · tuck**). In the air the body shows
+what it's doing: tucked tight for fast rotation, opened out to slow and
+spot the landing, shoulders leading the spin.
+
 Crash and you slide, tumble and come to rest; three seconds later you get
 back up where you stopped, skis on, ready to go.
 

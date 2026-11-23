@@ -264,7 +264,7 @@ function skiGeometry() {
   const waist = 0.088;
   const tip = 0.122;
   const tail = 0.116;
-  const g = new THREE.BoxGeometry(1, T, L, 1, 1, 48);
+  const g = new THREE.BoxGeometry(1, T, L, 1, 1, lod(48, 10));
   const p = g.attributes.position;
   for (let i = 0; i < p.count; i++) {
     const z = p.getZ(i);
@@ -299,7 +299,17 @@ function folds(a, y, s) {
 // squashed to an oval (sx, sz by height) and rippled with folds.
 //   profile  [radius, y] control points, smoothed through a spline
 //   wrinkle  fold depth as a fraction of the radius
+// Detail level for the geometry being built: 1 for the player, lower for
+// the crowd figures baked from the same model (see bakeSkier).
+let LOD = 1;
+const lod = (n, min = 4) => Math.max(min, Math.round(n * LOD));
+const sphere = (r, w = 16, h = 12, ...rest) => new THREE.SphereGeometry(r, lod(w, 6), lod(h, 4), ...rest);
+const cyl = (rt, rb, h, radial = 12, hs = 1, ...rest) => new THREE.CylinderGeometry(rt, rb, h, lod(radial, 5), hs, ...rest);
+const torus = (r, t, rs = 8, ts = 12, arc) => new THREE.TorusGeometry(r, t, lod(rs, 3), lod(ts, 5), arc);
+
 function garment(profile, { segs = 22, rings = 28, sx = 1, sz = 1, wrinkle = 0, seed = 1 } = {}) {
+  segs = lod(segs, 8);
+  rings = lod(rings, 6);
   const curve = new THREE.SplineCurve(profile.map(([r, y]) => new THREE.Vector2(r, y)));
   const g = new THREE.LatheGeometry(curve.getPoints(rings), segs);
   const p = g.attributes.position;
@@ -318,6 +328,9 @@ function garment(profile, { segs = 22, rings = 28, sx = 1, sz = 1, wrinkle = 0, 
 
 // A rounded box (soft corners), for boots and gloves.
 function softBox(w, h, d, r = 0.02, seg = 3) {
+  // Far-off crowd figures: a plain box reads the same.
+  if (LOD < 0.5) return new THREE.BoxGeometry(w, h, d);
+  seg = Math.max(1, Math.round(seg * LOD));
   const g = new THREE.BoxGeometry(w, h, d, seg * 2, seg * 2, seg * 4);
   const p = g.attributes.position;
   const hw = w / 2 - r;
@@ -340,11 +353,13 @@ function softBox(w, h, d, r = 0.02, seg = 3) {
 // A band of a sphere: phi around (0 = +x, PI/2 = +z, the front), theta down
 // from the top. Used for the spherical goggle lens and its frame.
 function sphereBand(r, phi0, phiLen, th0, thLen, w = 32, h = 8) {
-  return new THREE.SphereGeometry(r, w, h, phi0, phiLen, th0, thLen);
+  return new THREE.SphereGeometry(r, lod(w, 8), lod(h, 3), phi0, phiLen, th0, thLen);
 }
 
+// Joints are bones, so the skinned garments (pant legs, sleeves, the
+// jacket) bend smoothly with them.
 function joint(parent, x, y, z) {
-  const j = new THREE.Group();
+  const j = new THREE.Bone();
   j.position.set(x, y, z);
   parent.add(j);
   return j;
@@ -366,7 +381,43 @@ const FITS = {
   xxl: { pants: 1.48, jacket: 1.25, hem: 0.16 },
 };
 
-export function createSkierModel({ look = {}, envMap = null } = {}) {
+// A garment skinned to two bones: built in bone a's frame at the rest pose,
+// with each vertex's weight toward bone b from w(x, y, z) (0 = all a).
+// Turned into a SkinnedMesh once the whole rig exists (bindSkins).
+function skin(list, geo, mat, a, b, w) {
+  list.push({ geo, mat, a, b, w });
+}
+function bindSkins(root, list) {
+  root.updateMatrixWorld(true);
+  const rootInv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+  const m = new THREE.Matrix4();
+  for (const { geo, mat, a, b, w } of list) {
+    const p = geo.attributes.position;
+    const idx = new Uint16Array(p.count * 4);
+    const wt = new Float32Array(p.count * 4);
+    for (let i = 0; i < p.count; i++) {
+      const k = THREE.MathUtils.clamp(w(p.getX(i), p.getY(i), p.getZ(i)), 0, 1);
+      idx[i * 4] = 0;
+      idx[i * 4 + 1] = 1;
+      wt[i * 4] = 1 - k;
+      wt[i * 4 + 1] = k;
+    }
+    geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(idx, 4));
+    geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(wt, 4));
+    // Into the root's frame at the rest pose.
+    geo.applyMatrix4(m.multiplyMatrices(rootInv, a.matrixWorld));
+    const sm = new THREE.SkinnedMesh(geo, mat);
+    sm.castShadow = true;
+    sm.frustumCulled = false;
+    root.add(sm);
+    sm.updateMatrixWorld(true);
+    sm.bind(new THREE.Skeleton([a, b]));
+  }
+}
+const smoothstep = THREE.MathUtils.smoothstep;
+
+export function createSkierModel({ look = {}, envMap = null, detail = 1 } = {}) {
+  LOD = detail;
   const L = { ...LOOK_DEFAULT, ...look };
   const { jacket, trim, pants, helmet } = L;
   const fit = FITS[L.fit] || FITS.regular;
@@ -407,6 +458,7 @@ export function createSkierModel({ look = {}, envMap = null } = {}) {
 
   const root = new THREE.Group(); // feet on the snow
   root.name = 'player-skier';
+  const skins = [];
 
   // --- Feet: ski, binding and boot shell stay flat; the boot cuff and leg
   // hang off the ankle above.
@@ -433,34 +485,33 @@ export function createSkierModel({ look = {}, envMap = null } = {}) {
 
     const ankle = joint(foot, 0, ANKLE_Y, 0);
     // Cuff (oval, a touch taller at the back) and the tongue up the front.
-    mesh(new THREE.CylinderGeometry(0.07, 0.078, 0.25, 18).scale(1, 1, 1.18).translate(0, 0.055, -0.005), M.bootShell, ankle);
+    mesh(cyl(0.07, 0.078, 0.25, 18).scale(1, 1, 1.18).translate(0, 0.055, -0.005), M.bootShell, ankle);
     mesh(softBox(0.07, 0.22, 0.03, 0.012, 2), M.bootDark, ankle, 0, 0.07, 0.085);
     for (const y of [0.0, 0.09]) mesh(softBox(0.06, 0.014, 0.022, 0.005, 1), M.buckle, ankle, side * 0.03, y, 0.08);
-    mesh(new THREE.CylinderGeometry(0.083, 0.083, 0.035, 18, 1, true).scale(1, 1, 1.18), M.bindingHi, ankle, 0, 0.17, -0.005); // power strap
+    mesh(cyl(0.083, 0.083, 0.035, 18, 1, true).scale(1, 1, 1.18), M.bindingHi, ankle, 0, 0.17, -0.005); // power strap
 
-    // Shin: loose pant leg flaring over the boot, with a couple of stacked
-    // folds just above the hem.
-    mesh(
+    const knee = joint(ankle, 0, SHIN, 0);
+    // One pant leg from the stacked hem over the boot to the seat, skinned
+    // to the shin and thigh so it bends smoothly at the knee. Loose at the
+    // hem, a little roomier over the knee, filling out up the thigh.
+    const tp = Math.sqrt(pf);
+    skin(
+      skins,
       garment(
-        [[0.118, hemY], [0.124, hemY + 0.03], [0.112, hemY + 0.065], [0.12, hemY + 0.1], [0.108, 0.13], [0.104, 0.24], [0.098, 0.36], [0.095, SHIN], [0.088, SHIN + 0.06]].map(([r, y]) => [r * pf, y]),
-        { sz: 1.06, wrinkle: 0.045, seed: side * 3 + 1 },
+        [
+          [0.118 * pf, hemY], [0.124 * pf, hemY + 0.03], [0.112 * pf, hemY + 0.065], [0.12 * pf, hemY + 0.1], [0.108 * pf, 0.13],
+          [0.103 * pf, 0.26], [0.099 * pf, 0.38], [0.104 * pf, SHIN - 0.02], [0.106 * pf, SHIN + 0.06], [0.114 * pf, SHIN + 0.2],
+          [0.128 * tp, SHIN + 0.35], [0.134 * tp, SHIN + THIGH - 0.01], [0.12 * tp, SHIN + THIGH + 0.07],
+        ],
+        { sz: 1.05, rings: 44, wrinkle: 0.04, seed: side * 3 + 1 },
       ),
       M.pants,
       ankle,
-    );
-    const knee = joint(ankle, 0, SHIN, 0);
-    mesh(new THREE.SphereGeometry(0.1 * pf, 18, 12).scale(1, 1, 1.08), M.pants, knee, 0, 0, 0.004);
-    // Thigh: tapering up into the seat, roomy at the top.
-    const tp = Math.sqrt(pf);
-    mesh(
-      garment([[0.096 * pf, -0.04], [0.104 * pf, 0.06], [0.115 * pf, 0.2], [0.128 * tp, 0.35], [0.134 * tp, THIGH - 0.01], [0.118 * tp, THIGH + 0.06]], {
-        sz: 1.04,
-        wrinkle: 0.035,
-        seed: side * 5 + 2,
-      }),
-      M.pants,
       knee,
+      (x, y) => smoothstep(y, SHIN - 0.09, SHIN + 0.09),
     );
+    // A pad of fabric over the kneecap keeps the knee round when it bends hard.
+    mesh(sphere(0.088 * pf, 16, 12).scale(1, 0.9, 0.9), M.pants, knee, 0, 0.0, 0.03 * pf);
     legs.push({ foot, ski, ankle, knee, side });
   }
 
@@ -475,20 +526,25 @@ export function createSkierModel({ look = {}, envMap = null } = {}) {
   const hem = -0.25 - fit.hem;
   const shoulderW = (y) => 1 + 0.14 * THREE.MathUtils.smoothstep(y, 0.05, 0.42) - 0.12 * THREE.MathUtils.smoothstep(y, 0.47, 0.56);
   const depth = (y) => 0.74 + 0.12 * (1 - THREE.MathUtils.smoothstep(y, 0.0, 0.2));
-  mesh(
+  // Skinned to the hips and the spine: the hem hangs from the hips while
+  // the chest leans and twists with the spine, creasing at the waist.
+  skin(
+    skins,
     garment(
       [[0.222 * jf, hem], [0.226 * jf, hem + 0.035], [0.214 * jf, hem + 0.09], [0.208 * jf, -0.04], [0.204 * jf, 0.1], [0.21 * jf, 0.24], [0.215 * jf, 0.36], [0.208 * jf, 0.45], [0.17 * jf, 0.515], [0.11, 0.55], [0.085, 0.56]],
       { segs: 28, rings: 40, sx: shoulderW, sz: depth, wrinkle: 0.025, seed: 9 },
-    ),
+    ).translate(0, 0.04, 0),
     M.jacket,
+    hips,
     spine,
+    (x, y) => smoothstep(y, -0.06, 0.2),
   );
   // Funnel collar zipped to the chin.
   mesh(garment([[0.1, -0.02], [0.098, 0.05], [0.104, 0.11], [0.108, 0.12]], { sz: 1.02, rings: 8, segs: 20 }), M.sleeve, spine, 0, TORSO - 0.01, 0.01);
   // Hood down: bunched on the shoulders behind the collar.
   if (L.hood !== 'up') {
-    mesh(new THREE.TorusGeometry(0.1, 0.045, 10, 18, Math.PI * 1.1).rotateX(Math.PI / 2 + 0.35).rotateY(Math.PI - 0.15 * Math.PI), M.sleeve, spine, 0, TORSO + 0.005, -0.04);
-    mesh(new THREE.SphereGeometry(0.1, 16, 10).scale(1.25, 0.55, 0.6), M.sleeve, spine, 0, TORSO - 0.03, -0.12);
+    mesh(torus(0.1, 0.045, 10, 18, Math.PI * 1.1).rotateX(Math.PI / 2 + 0.35).rotateY(Math.PI - 0.15 * Math.PI), M.sleeve, spine, 0, TORSO + 0.005, -0.04);
+    mesh(sphere(0.1, 16, 10).scale(1.25, 0.55, 0.6), M.sleeve, spine, 0, TORSO - 0.03, -0.12);
   }
   // Backpack: a slim park pack riding high on the back, with shoulder
   // straps over the jacket and a sternum strap.
@@ -499,7 +555,7 @@ export function createSkierModel({ look = {}, envMap = null } = {}) {
     mesh(new THREE.BoxGeometry(0.2, 0.012, 0.02), M.trim, spine, 0, 0.255, -0.316); // pocket zip
     for (const s of [-1, 1]) {
       // Over the shoulder and down the chest.
-      mesh(new THREE.TorusGeometry(0.17, 0.016, 6, 14, Math.PI * 0.95).scale(0.6, 1, 1).rotateY(Math.PI / 2).rotateX(-0.15), packM, spine, s * 0.105, 0.33, -0.01);
+      mesh(torus(0.17, 0.016, 6, 14, Math.PI * 0.95).scale(0.6, 1, 1).rotateY(Math.PI / 2).rotateX(-0.15), packM, spine, s * 0.105, 0.33, -0.01);
       mesh(softBox(0.05, 0.22, 0.02, 0.008, 1), packM, spine, s * 0.1, 0.27, 0.168);
     }
     mesh(new THREE.BoxGeometry(0.2, 0.025, 0.02), M.trim, spine, 0, 0.32, 0.178);
@@ -507,22 +563,22 @@ export function createSkierModel({ look = {}, envMap = null } = {}) {
   const neck = joint(spine, 0, TORSO + 0.03, 0.01);
   const head = new THREE.Group();
   neck.add(head);
-  mesh(new THREE.SphereGeometry(0.1, 18, 14).scale(0.92, 1.1, 1.0), M.skin, head, 0, 0.1, 0.012);
+  mesh(sphere(0.1, 18, 14).scale(0.92, 1.1, 1.0), M.skin, head, 0, 0.1, 0.012);
   // Face mask pulled up to the goggles.
   mesh(garment([[0.098, -0.03], [0.1, 0.02], [0.104, 0.07], [0.095, 0.1], [0.07, 0.12]], { sz: 1.08, rings: 12, segs: 20, wrinkle: 0.03, seed: 4 }), M.gaiter, head, 0, 0, 0.012);
   // Helmet: low-profile shell dropping over the ears, with a small brim.
-  mesh(new THREE.SphereGeometry(0.138, 28, 16, 0, Math.PI * 2, 0, Math.PI * 0.56).scale(1.0, 0.94, 1.12), M.helmet, head, 0, 0.12, -0.008);
-  for (const s of [-1, 1]) mesh(new THREE.SphereGeometry(0.06, 14, 10).scale(0.42, 1, 1.05), M.helmet, head, s * 0.128, 0.09, -0.015);
-  mesh(new THREE.CylinderGeometry(0.152, 0.155, 0.014, 28, 1, false, -0.85, 1.7).scale(1, 1, 1.12), M.helmet, head, 0, 0.185, -0.008);
+  mesh(sphere(0.138, 28, 16, 0, Math.PI * 2, 0, Math.PI * 0.56).scale(1.0, 0.94, 1.12), M.helmet, head, 0, 0.12, -0.008);
+  for (const s of [-1, 1]) mesh(sphere(0.06, 14, 10).scale(0.42, 1, 1.05), M.helmet, head, s * 0.128, 0.09, -0.015);
+  mesh(cyl(0.152, 0.155, 0.014, 28, 1, false, -0.85, 1.7).scale(1, 1, 1.12), M.helmet, head, 0, 0.185, -0.008);
   // Big frameless spherical goggles, wider than the face, strap round the helmet.
   const gy = 0.125;
   mesh(sphereBand(0.148, Math.PI / 2 - 1.2, 2.4, Math.PI / 2 - 0.33, 0.66).scale(1.05, 1, 1.16), M.frame, head, 0, gy, 0.0);
   mesh(sphereBand(0.152, Math.PI / 2 - 1.12, 2.24, Math.PI / 2 - 0.29, 0.58).scale(1.05, 1, 1.16), M.lens, head, 0, gy, 0.0);
-  mesh(new THREE.CylinderGeometry(0.145, 0.145, 0.042, 28, 1, true, 1.2, Math.PI * 2 - 2.4).scale(1.02, 1, 1.12), M.strap, head, 0, gy + 0.008, -0.008);
+  mesh(cyl(0.145, 0.145, 0.042, 28, 1, true, 1.2, Math.PI * 2 - 2.4).scale(1.02, 1, 1.12), M.strap, head, 0, gy + 0.008, -0.008);
   // Hood up, over the helmet: open at the face.
   if (L.hood === 'up') {
     mesh(
-      new THREE.SphereGeometry(0.168, 28, 16, Math.PI / 2 + 0.95, Math.PI * 2 - 1.9, 0, Math.PI * 0.78).scale(1.04, 1.02, 1.1),
+      sphere(0.168, 28, 16, Math.PI / 2 + 0.95, Math.PI * 2 - 1.9, 0, Math.PI * 0.78).scale(1.04, 1.02, 1.1),
       M.sleeve,
       head,
       0,
@@ -536,29 +592,43 @@ export function createSkierModel({ look = {}, envMap = null } = {}) {
   const arms = [];
   for (const side of [-1, 1]) {
     const shoulder = joint(spine, side * 0.2, TORSO - 0.1, -0.005);
-    mesh(new THREE.SphereGeometry(0.088 * jf, 18, 12), M.sleeve, shoulder);
-    const upper = mesh(garment([[0.084 * jf, -0.02], [0.082 * jf, 0.08], [0.076 * jf, UPPER_ARM - 0.02], [0.07 * jf, UPPER_ARM + 0.03]], { wrinkle: 0.05, seed: side * 2 + 11, segs: 18, rings: 16 }), M.sleeve, shoulder);
-    upper.rotation.x = Math.PI; // hangs down from the shoulder
+    mesh(sphere(0.088 * jf, 18, 12), M.sleeve, shoulder);
     const elbow = joint(shoulder, 0, -UPPER_ARM, 0);
-    mesh(new THREE.SphereGeometry(0.071 * jf, 16, 10), M.sleeve, elbow);
-    // Forearm, ending in a roomy cuff pulled over the glove's gauntlet.
-    const fore = mesh(garment([[0.068 * jf, -0.01], [0.07 * jf, 0.06], [0.064 * jf, FOREARM - 0.08], [0.074 * jf, FOREARM - 0.03], [0.072 * jf, FOREARM - 0.005]], { wrinkle: 0.06, seed: side * 2 + 13, segs: 18, rings: 16 }), M.sleeve, elbow);
-    fore.rotation.x = Math.PI;
+    // One sleeve from the shoulder to a roomy cuff over the glove, skinned
+    // to the upper arm and forearm so it bends at the elbow.
+    const U = UPPER_ARM;
+    skin(
+      skins,
+      garment(
+        [
+          [0.072 * jf, -U - FOREARM + 0.005], [0.074 * jf, -U - FOREARM + 0.03], [0.064 * jf, -U - FOREARM + 0.08], [0.068 * jf, -U - 0.08],
+          [0.072 * jf, -U], [0.076 * jf, -U + 0.07], [0.082 * jf, -0.08], [0.085 * jf, 0.0], [0.07 * jf, 0.05],
+        ],
+        { wrinkle: 0.05, seed: side * 2 + 11, segs: 18, rings: 30 },
+      ),
+      M.sleeve,
+      shoulder,
+      elbow,
+      (x, y) => smoothstep(-y, U - 0.07, U + 0.07),
+    );
+    // Elbow pad of fabric so a hard bend stays round.
+    mesh(sphere(0.064 * jf, 14, 10), M.sleeve, elbow);
     const hand = joint(elbow, 0, -FOREARM, 0);
     // Mitt: gauntlet, a soft rounded mitt and a thumb.
-    mesh(new THREE.CylinderGeometry(0.06, 0.054, 0.08, 14), M.glove, hand, 0, 0.015, 0);
+    mesh(cyl(0.06, 0.054, 0.08, 14), M.glove, hand, 0, 0.015, 0);
     mesh(softBox(0.085, 0.12, 0.065, 0.03, 3), M.glove, hand, 0, -0.06, 0.008);
     mesh(new THREE.CapsuleGeometry(0.018, 0.04, 4, 8).rotateZ(side * 0.5), M.glove, hand, -side * 0.04, -0.04, 0.03);
     // Pole: grip in the hand, tapered shaft, basket near the tip.
     const pole = new THREE.Group();
     pole.position.set(0, -0.06, 0.01);
     hand.add(pole);
-    mesh(new THREE.CylinderGeometry(0.017, 0.02, 0.15, 10), M.trim, pole, 0, 0.02, 0);
-    mesh(new THREE.CylinderGeometry(0.009, 0.006, 1.1, 8).translate(0, -0.55, 0), M.pole, pole);
-    mesh(new THREE.CylinderGeometry(0.038, 0.038, 0.008, 12), M.trim, pole, 0, -1.0, 0);
+    mesh(cyl(0.017, 0.02, 0.15, 10), M.trim, pole, 0, 0.02, 0);
+    mesh(cyl(0.009, 0.006, 1.1, 8).translate(0, -0.55, 0), M.pole, pole);
+    mesh(cyl(0.038, 0.038, 0.008, 12), M.trim, pole, 0, -1.0, 0);
     mesh(new THREE.ConeGeometry(0.006, 0.04, 6).rotateX(Math.PI), M.buckle, pole, 0, -1.12, 0);
     arms.push({ shoulder, elbow, hand, pole, side });
   }
+  bindSkins(root, skins);
 
   // --- Two-bone IK: put the hand at `target` (in the spine's frame) with the
   // elbow pointing toward `pole`.
@@ -613,7 +683,7 @@ export function createSkierModel({ look = {}, envMap = null } = {}) {
   //   fallen   lying in the snow after a crash: legs long, arms flung out
   const p = {
     crouch: 0.25, tuck: 0, fold: 0, air: 0, grab: 0, grabType: 'mute', airArms: 0, seated: 0,
-    lean: 0, twist: 0, look: 0, plantL: 0, plantR: 0, wobble: 0, t: 0, press: 0, fallen: 0,
+    lean: 0, twist: 0, look: 0, plantL: 0, plantR: 0, wobble: 0, t: 0, press: 0, fallen: 0, check: 0, checkSide: 1, wide: 0,
   };
   const tgt = v3();
   const tw = v3();
@@ -668,7 +738,7 @@ export function createSkierModel({ look = {}, envMap = null } = {}) {
     // up to the hand first (knee to the chest, or the foot kicked back for a
     // tail grab), and only then does the back bend (or straighten) to close
     // the gap, so the skier stays as upright as the grab allows.
-    const fwd0 = seated ? -0.12 : (1 - p.fallen) * 0.28 + 0.35 * crouch + 0.5 * p.tuck + 0.45 * Math.min(1, p.fold) + 0.15 * p.press;
+    const fwd0 = seated ? -0.12 : (1 - p.fallen) * 0.28 + 0.35 * crouch + 0.5 * p.tuck + 0.45 * Math.min(1, p.fold) + 0.15 * p.press - 0.45 * p.check;
     const gTwist = grabbing ? p.grab * (p.grabType === 'mute' ? 0.4 : tail ? 0.45 : -0.15) : 0;
     const tweak = grabbing ? grabTweak(p.grabType) * p.grab : 0;
     function shape(pull, fwd) {
@@ -686,9 +756,12 @@ export function createSkierModel({ look = {}, envMap = null } = {}) {
         // carries the whole leg with it, so turn the offset the same way.
         const pitch = seated ? 0.35 : tweak + 1.4 * p.fallen;
         if (!seated) off.applyAxisAngle(X_AXIS, pitch);
-        L.foot.position.set(L.side * (STANCE + 0.12 * p.fallen), hipPos.y - off.y, hipPos.z - off.z);
+        // A wider stance (a snowboarder's) splays the feet; the legs lean
+        // in from them to meet the hips.
+        L.foot.position.set(L.side * (STANCE + p.wide + 0.12 * p.fallen), hipPos.y - off.y, hipPos.z - off.z);
         L.foot.rotation.set(pitch, 0, 0);
-        L.ankle.rotation.set(s, 0, -p.lean * 0.18 + L.side * 0.2 * p.fallen);
+        const splay = p.wide ? Math.atan2(p.wide, Math.max(0.3, off.y)) : 0;
+        L.ankle.rotation.set(s, 0, -p.lean * 0.18 + L.side * (0.2 * p.fallen + splay));
         L.knee.rotation.set(a - s, 0, 0);
       }
       if (seated) spine.rotation.set(fwd, 0, 0);
@@ -730,6 +803,9 @@ export function createSkierModel({ look = {}, envMap = null } = {}) {
         if (plant > 0) tgt.lerp(tw.set(sd * 0.32, 0.12, 0.44), plant);
         if (p.airArms > 0) tgt.lerp(tw.set(sd * 0.6, 0.4, 0.12), p.airArms);
         if (p.fallen > 0) tgt.lerp(tw.set(sd * 0.62, 0.42, 0.06), p.fallen);
+        // Hand drag: the downhill hand reaches back to the snow beside the hip.
+        if (p.check > 0 && sd === p.checkSide) tgt.lerp(tw.set(sd * 0.44, -0.3, -0.1), p.check);
+        else if (p.check > 0) tgt.lerp(tw.set(sd * 0.5, 0.35, 0.3), p.check * 0.7);
         if (p.wobble > 0) {
           const ph = p.t * 13 + sd * 1.7;
           tgt.lerp(tw.set(sd * (0.45 + 0.2 * Math.sin(ph)), 0.35 + 0.25 * Math.cos(ph), 0.15 * Math.sin(ph * 0.7)), p.wobble);
@@ -796,5 +872,67 @@ export function createSkierModel({ look = {}, envMap = null } = {}) {
       }
     });
   }
-  return { root, pose, params: p, setSkis, dispose, rig: { arms, legs, spine } };
+  LOD = 1;
+  return { root, pose, params: p, setSkis, dispose, materials: M, rig: { arms, legs, spine, hips } };
+}
+
+// --- Crowd figures baked from the same model: pose it, then freeze every
+// part into plain geometry in the root's frame, sorted into the four
+// buckets the crowd draws (jacket and pants take each person's colours as
+// white vertices; gear, skin and lenses keep their own colours; the helmet
+// takes a helmet colour). Skinned garments are baked in their posed shape.
+export function bakeSkier(poseParams = {}, { detail = 0.4, look = {}, skis = true, poles = true, minPart = 0.035 } = {}) {
+  const model = createSkierModel({ look: { fit: 'baggy', jacketDesign: 'solid', pantsDesign: 'solid', ...look }, detail });
+  model.setSkis(skis);
+  for (const A of model.rig.arms) A.pole.visible = poles;
+  model.pose(poseParams);
+  model.root.updateMatrixWorld(true);
+  const M = model.materials;
+  const bucket = (mat) => {
+    if (mat === M.jacket || mat === M.sleeve) return ['jacket', 0xffffff];
+    if (mat === M.pants) return ['gear', 0xffffff];
+    if (mat === M.helmet) return ['helmet', 0xffffff];
+    if (mat === M.lens) return ['skin', 0xff7a1a];
+    if (mat === M.skiTop || Array.isArray(mat)) return ['skin', 0x1d2024];
+    if (mat === M.strap || mat === M.trim) return ['skin', 0x1a1d21];
+    return ['skin', mat.color ? mat.color.getHex() : 0x1a1d21];
+  };
+  const out = { jacket: [], gear: [], skin: [], helmet: [] };
+  const v = new THREE.Vector3();
+  const c = new THREE.Color();
+  model.root.traverse((o) => {
+    if (!o.isMesh || !o.visible) return;
+    let vis = true;
+    for (let q = o.parent; q; q = q.parent) if (q.visible === false) vis = false;
+    if (!vis) return;
+    const src = o.geometry;
+    // Buckles, brakes and baskets can't be seen on a figure in the crowd.
+    if (!src.boundingSphere) src.computeBoundingSphere();
+    if (src.boundingSphere.radius < minPart) return;
+    const g = new THREE.BufferGeometry();
+    const n = src.attributes.position.count;
+    const pos = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      v.fromBufferAttribute(src.attributes.position, i);
+      if (o.isSkinnedMesh) o.applyBoneTransform(i, v);
+      v.applyMatrix4(o.matrixWorld);
+      pos.set([v.x, v.y, v.z], i * 3);
+    }
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    if (src.index) g.setIndex(src.index.clone());
+    else g.setIndex([...Array(n).keys()]);
+    g.computeVertexNormals();
+    const [key, hexC] = bucket(o.material);
+    c.setHex(hexC);
+    const col = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) col.set([c.r, c.g, c.b], i * 3);
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    out[key].push(g);
+  });
+  // Where the hips ended up (for seating a rider on a chair).
+  const hipsAt = new THREE.Vector3();
+  model.rig.hips.getWorldPosition(hipsAt);
+  model.dispose();
+  out.hips = hipsAt;
+  return out;
 }

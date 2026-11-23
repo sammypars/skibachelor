@@ -19,8 +19,8 @@
 <script type="module">
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { createSkierModel } from '../src/skier-model.js';
-import { skierParts, boarderParts } from '../src/render/people.js';
+import { createSkierModel, bakeSkier } from '../src/skier-model.js';
+import { boarderParts } from '../src/render/people.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const qs = new URLSearchParams(location.search);
@@ -56,12 +56,14 @@ const POSES = [
   ['safety', { air: 1, grab: 1, grabType: 'safety', fold: 0.4 }],
   ['tail', { air: 1, grab: 1, grabType: 'tail', fold: 0.3 }],
   ['airArms', { air: 1, airArms: 1 }],
+  ['handDrag', { crouch: 0.95, check: 1, checkSide: -1 }],
+  ['boarder', { crouch: 0.5, wide: 0.16, airArms: 0.75 }],
 ];
 const figs = [];
 const holders = [];
 if (qs.get('npc')) {
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.72 });
-  [skierParts(), boarderParts()].forEach((parts, i) => {
+  [bakeSkier({ crouch: 0.35 }), boarderParts()].forEach((parts, i) => {
     const g = new THREE.Group();
     for (const k of ['jacket', 'gear', 'skin', 'helmet']) {
       if (!parts[k]?.length) continue;
