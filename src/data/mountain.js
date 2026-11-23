@@ -24,6 +24,15 @@ export const GEO = {
     offset: 1000, // stored as uint16: h = offset + value * step
     step: 0.05,
   },
+  // Fine lidar relief over the ski area (12 ft source pixels) that the 7.5 m
+  // grid can't carry: detail.png, lit by the terrain shader.
+  detail: {
+    minX: -3800,
+    minZ: -2400,
+    size: 6800,
+    n: 2048,
+    scale: 0.025, // m per grey level, 128 = none
+  },
   // Tree cover over the ski area, classified from USGS aerial imagery (public
   // domain): 0 = open ground, 255 = solid canopy. 4 m cells.
   trees: {
@@ -109,7 +118,7 @@ export const BUILDING_STYLES = {
 //
 // `line` is the park top to bottom: each row is a set of features side by
 // side, given as [type, variant, lateral offset in m (+ = right looking
-// downhill)]. Jumps: xs/s/m/l/xl. Rails: flat, down, dfd (down-flat-down),
+// downhill)]. Jumps: xs/s/m/l/xl, and xxl (contest gap jumps). Rails: flat, down, dfd (down-flat-down),
 // kink, rainbow. Boxes: flat, down, ride-on. 'roof' is a timber A-frame jib.
 export const PARKS = {
   'Pacific City': {
@@ -126,19 +135,32 @@ export const PARKS = {
   },
   'The Point': {
     size: 'L', lift: 'Skyliner', note: 'Biggest jumps and rails on the mountain',
+    // Three contest-size gap jumps in a row off a long drop-in, then the big
+    // rails and a lower jib and jump section. Built once, not repeated.
+    once: true,
+    inrun: 58,
     line: [
+      [['jump', 'xxl', 0]],
+      [['jump', 'xxl', 0]],
+      [['jump', 'xxl', 0]],
       [['rail', 'dfd', -7], ['rail', 'kink', 7]],
-      [['jump', 'l', -6], ['jump', 'xl', 6]],
-      [['jump', 'l', -6], ['jump', 'xl', 6]],
-      [['jump', 'xl', 0]],
       [['rail', 'rainbow', -6], ['box', 'down', 6]],
+      [['hip', 'r', -4, 'l']],
+      [['jump', 'l', -6], ['jump', 'm', 6]],
+      [['rail', 'flat', -6], ['battleship', 'm', 0], ['box', 'flat', 6]],
+      [['jump', 'l', 0]],
     ],
   },
   'Canon Beach': {
     label: 'Cannon Beach', size: 'M/L', lift: 'Skyliner', note: 'Flowy jump lines, rails and boxes',
+    // Up top: three big jumps in a row. Then the flowy lower half.
+    once: true,
+    inrun: 70,
     line: [
+      [['jump', 'xl', 0]],
+      [['jump', 'xl', 0]],
+      [['jump', 'xl', 0]],
       [['box', 'flat', -6], ['rail', 'down', 6]],
-      [['jump', 'm', 0]],
       [['berm', 'r', 2]],
       [['jump', 'm', -2]],
       [['rail', 'flat', -6], ['roof', 'a', 0], ['box', 'down', 6]],

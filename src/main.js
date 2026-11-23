@@ -248,6 +248,7 @@ const ski = createSki({
   surfaceAt: parks.surfaceAt,
   treeNear: forest.treeNear,
   grindables: parks.grindables,
+  kickers: parks.jumps,
   lifts,
   hud: $('#ski-hud'),
   envMap,

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { fbm, smoothstep } from '../world/noise.js';
 import { EDGE_HEIGHT } from '../world/world.js';
 import { addSparkle } from './sparkle.js';
+import { GEO } from '../data/mountain.js';
 
 const TEX = 2048;
 
@@ -188,6 +189,92 @@ function addCanopyBlend(mat, canopyTex) {
   mat.userData.canopy = uniforms;
 }
 
+// Fine lidar relief the 7.5 m mesh can't carry (cat tracks, rolls, gullies):
+// a height-difference image over the ski area, turned into a bumped normal
+// in the shader. It fades out with distance, where it would only shimmer.
+function addLidarDetail(mat) {
+  const D = GEO.detail;
+  if (!D) return;
+  const uniforms = {
+    lidarMap: { value: null },
+    lidarOn: { value: 0 },
+    lidarMin: { value: new THREE.Vector2(D.minX, D.minZ) },
+    lidarSize: { value: D.size },
+    // Slopes are stored as 128 + 127 * slope / SLOPE_MAX. x2 on top:
+    // snow is bright and low-contrast, so the fine relief is drawn a little
+    // stronger than life to read at all.
+    lidarK: { value: 2 * 1.5 },
+  };
+  const SLOPE_MAX = 1.5;
+  // Turn the height image into slopes once (x in R, z in G), so the shader
+  // reads one texel instead of four.
+  new THREE.ImageLoader().load(new URL('../data/geo/detail.png', import.meta.url).href, (img) => {
+    const n = img.width;
+    const c = document.createElement('canvas');
+    c.width = c.height = n;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.drawImage(img, 0, 0);
+    const src = g.getImageData(0, 0, n, n).data;
+    const out = new Uint8Array(n * n * 4);
+    const k = D.scale / (2 * (D.size / n)); // grey-level difference over 2 texels -> slope
+    const h = (i, j) => src[(Math.min(n - 1, Math.max(0, j)) * n + Math.min(n - 1, Math.max(0, i))) * 4];
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < n; i++) {
+        const sx = (h(i + 1, j) - h(i - 1, j)) * k;
+        const sz = (h(i, j + 1) - h(i, j - 1)) * k;
+        const o = (j * n + i) * 4;
+        out[o] = Math.max(0, Math.min(255, Math.round(128 + (127 * sx) / SLOPE_MAX)));
+        out[o + 1] = Math.max(0, Math.min(255, Math.round(128 + (127 * sz) / SLOPE_MAX)));
+        out[o + 3] = 255;
+      }
+    }
+    const tex = new THREE.DataTexture(out, n, n, THREE.RGBAFormat);
+    tex.colorSpace = THREE.NoColorSpace;
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.generateMipmaps = true;
+    tex.anisotropy = 4;
+    tex.needsUpdate = true;
+    uniforms.lidarMap.value = tex;
+    uniforms.lidarOn.value = 1;
+  });
+  mat.userData.lidar = uniforms;
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = (shader, renderer) => {
+    prev?.call(mat, shader, renderer);
+    Object.assign(shader.uniforms, uniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vLidarW;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\nvLidarW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        varying vec3 vLidarW;
+        uniform sampler2D lidarMap;
+        uniform float lidarOn, lidarSize, lidarK;
+        uniform vec2 lidarMin;`,
+      )
+      .replace(
+        '#include <normal_fragment_maps>',
+        `#include <normal_fragment_maps>
+        if (lidarOn > 0.5) {
+          vec2 duv = (vLidarW.xz - lidarMin) / lidarSize;
+          vec2 inside = smoothstep(0.0, 0.02, duv) * (1.0 - smoothstep(0.98, 1.0, duv));
+          float fade = inside.x * inside.y * (1.0 - smoothstep(900.0, 3500.0, distance(vLidarW, cameraPosition)));
+          if (fade > 0.0) {
+            vec2 g = (texture2D(lidarMap, duv).rg * 255.0 - 128.0) / 127.0 * lidarK * fade;
+            vec3 vx = (viewMatrix * vec4(1.0, 0.0, 0.0, 0.0)).xyz;
+            vec3 vz = (viewMatrix * vec4(0.0, 0.0, 1.0, 0.0)).xyz;
+            normal = normalize(normal - g.x * vx - g.y * vz);
+          }
+        }`,
+      );
+  };
+  const key = mat.customProgramCacheKey?.bind(mat);
+  mat.customProgramCacheKey = () => (key ? key() : '') + '|lidar-detail';
+}
+
 export function buildTerrain(world) {
   const { hf } = world;
   const n = hf.n;
@@ -209,6 +296,7 @@ export function buildTerrain(world) {
   const { map, canopy } = paintGround(world);
   const mat = new THREE.MeshStandardMaterial({ map, roughness: 0.92, metalness: 0 });
   addCanopyBlend(mat, canopy);
+  addLidarDetail(mat);
   addSparkle(mat);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;

@@ -83,7 +83,7 @@ const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const GRAB_NAMES = { mute: 'Mute', safety: 'Safety', japan: 'Japan', tail: 'Tail' };
 const grabList = (grabs) => grabs.map((g) => GRAB_NAMES[g]).join(' to ');
 
-export function createSki({ scene, camera, world, surfaceAt, treeNear, grindables = [], lifts, hud, envMap = null }) {
+export function createSki({ scene, camera, world, surfaceAt, treeNear, grindables = [], kickers = [], lifts, hud, envMap = null }) {
   const keys = new Set();
   const touch = new Set();
   const held = (...names) => names.some((n) => keys.has(n) || touch.has(n));
@@ -185,6 +185,49 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
     const hx = surfaceAt(x + e, z) - surfaceAt(x - e, z);
     const hz = surfaceAt(x, z + e) - surfaceAt(x, z - e);
     return out.set(-hx, 2 * e, -hz).normalize();
+  }
+
+  // Leaving a kicker: the shaped lip throws you at its built angle. (The
+  // snow surface is sampled on a half-meter grid, which rounds a sharp lip
+  // off by several degrees.) Keeps speed and heading; only raises the pitch.
+  function offTheLip() {
+    for (const k of kickers) {
+      const dx = pos.x - k.lipPos.x;
+      const dz = pos.z - k.lipPos.z;
+      if (dx * dx + dz * dz > 9) continue;
+      const along = dx * k.lipDir.x + dz * k.lipDir.z;
+      const across = Math.abs(dx * k.lipDir.z - dz * k.lipDir.x);
+      if (along < -1.2 || along > 1.2 || across > k.halfWidth + 0.3) continue;
+      const vh = Math.hypot(vel.x, vel.z);
+      if (vh < 2 || (vel.x * k.lipDir.x + vel.z * k.lipDir.z) / vh < 0.6) continue;
+      const sp = vel.length();
+      const pitch = Math.max(Math.asin(THREE.MathUtils.clamp(vel.y / sp, -1, 1)), k.lipAngle);
+      const h = Math.cos(pitch) * sp;
+      vel.set((vel.x / vh) * h, Math.sin(pitch) * sp, (vel.z / vh) * h);
+      return;
+    }
+  }
+
+  // Surface normal from the snow just traversed: along the travel from a
+  // point 0.35 m back, across it from a centred difference.
+  const tdir = new THREE.Vector3();
+  const tside = new THREE.Vector3();
+  function trailingNormal(x, z, h0, out) {
+    tdir.set(vel.x, 0, vel.z);
+    const l = tdir.length();
+    if (l < 2) return normalAt(x, z, out);
+    tdir.divideScalar(l);
+    const b = 0.35;
+    const hb = surfaceAt(x - tdir.x * b, z - tdir.z * b);
+    tside.set(-tdir.z, 0, tdir.x);
+    const e = 0.5;
+    const hs = surfaceAt(x + tside.x * e, z + tside.z * e) - surfaceAt(x - tside.x * e, z - tside.z * e);
+    // Tangents: along (b, h0 - hb), across (2e, hs); normal = across x along.
+    const ax = tdir.x * b, ay = h0 - hb, az = tdir.z * b;
+    const cx = tside.x * 2 * e, cy = hs, cz = tside.z * 2 * e;
+    out.set(cy * az - cz * ay, cz * ax - cx * az, cx * ay - cy * ax).normalize();
+    if (out.y < 0) out.negate();
+    return out;
   }
 
   // --- Input.
@@ -490,11 +533,15 @@ export function createSki({ scene, camera, world, surfaceAt, treeNear, grindable
     const s = surfaceAt(tmp.x, tmp.z);
     if (tmp.y > s + 0.008) {
       pos.copy(tmp);
+      offTheLip();
       takeoff(load);
       return;
     }
     pos.set(tmp.x, s, tmp.z);
-    normalAt(pos.x, pos.z, n2);
+    // The slope just behind the skis (the snow they're actually on), so a
+    // kicker sends you off at its real lip angle rather than one averaged
+    // with the drop past the lip.
+    trailingNormal(pos.x, pos.z, s, n2);
     const vn = vel.dot(n2);
     // The snow stops us sinking in: that is the normal force (more in a
     // compression, less over a roll).

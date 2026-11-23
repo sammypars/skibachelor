@@ -24,7 +24,11 @@ const JUMPS = {
   s: { H: 0.9, lip: 22, land: 31, D: 4.5, W: 4.5 },
   m: { H: 1.4, lip: 25, land: 33, D: 7, W: 6 },
   l: { H: 2.0, lip: 27, land: 34, D: 10, W: 8 },
-  xl: { H: 2.7, lip: 29, land: 35, D: 13.5, W: 10 },
+  xl: { H: 3.0, lip: 30, land: 36, D: 15, W: 11 },
+  // Contest size, X Games style: a tall steep lip, a long table dug out in
+  // the middle (a gap: come up short and you case the far wall), and a
+  // long steep landing.
+  xxl: { H: 3.8, lip: 32, land: 37, D: 20, W: 13, gap: true },
 };
 const smooth = (t) => t * t * (3 - 2 * t);
 const G = 9.81;
@@ -57,8 +61,16 @@ function buildJump(J, tA, deckScale, tB) {
   const xD = xL + GAP;
   const yD0 = yL - 0.25;
   const xK = xD + J.D * deckScale;
-  const deck = (x) => yD0 - tDeck * (x - xD);
-  const yK = deck(xK);
+  const deckTop = (x) => yD0 - tDeck * (x - xD);
+  // Gap jumps: the middle of the table is cut away with steep walls.
+  const gapDepth = J.gap ? J.H * 0.85 : 0;
+  const deck = (x) => {
+    if (!gapDepth) return deckTop(x);
+    const w = 2.2; // wall run
+    const u = Math.min(clamp01((x - xD - 2.5) / w), clamp01((xK - 3.5 - x) / w));
+    return deckTop(x) - gapDepth * smooth(u);
+  };
+  const yK = deckTop(xK);
   const hK = yK - ground(xK); // table height above the slope at the knuckle
   // Landing: straight at the landing angle for the top 60% of its drop,
   // then a long smooth curve out onto the slope.
@@ -81,7 +93,7 @@ function buildJump(J, tA, deckScale, tB) {
     // Rounded knuckle: blend deck into landing over 1.6 m.
     if (x < xK - 0.8) return deck(x);
     const landAbs = ground(x) + relLand(x);
-    if (x < xK + 0.8) return deck(x) + (landAbs - deck(x)) * smooth((x - xK + 0.8) / 1.6);
+    if (x < xK + 0.8) return deckTop(x) + (landAbs - deckTop(x)) * smooth((x - xK + 0.8) / 1.6);
     return landAbs;
   };
   // Sweet spot about a third of the way down the straight part, and the
@@ -203,8 +215,9 @@ class SnowBuilder {
   // meters sideways, `width` wide, with sloped sides.
   drape(run, s0, offset, width, profile) {
     const { hf } = this;
-    // Shaped features have firm, steep sidewalls (~45 degrees).
-    const side = Math.max(0.8, profile.height * 1.05);
+    // Shaped features have firm, steep sidewalls (~50 degrees), cut sharper
+    // the bigger the feature, like a contest build.
+    const side = Math.max(0.8, profile.height * (profile.height > 2.5 ? 0.75 : 1.0));
     const na = Math.max(4, Math.ceil(profile.length / 0.5));
     const cs = profile.cross
       ? [-width / 2 - side, -width / 2, -width * 0.375, -width / 4, -width / 8, 0, width / 8, width / 4, width * 0.375, width / 2, width / 2 + side]
@@ -658,6 +671,25 @@ export function buildParks(world) {
     g.setIndex(idx);
     dye.push(g);
   };
+  // Dye down a jump's edge from a0 to a1 at sideways c (contest builds paint
+  // the edges of the lip and landing so riders can read them in flat light).
+  const dyeAlong = (run, s, a0, a1, off, c, prof) => {
+    const pos = [];
+    const idx = [];
+    const N = Math.max(2, Math.ceil((a1 - a0) / 0.5));
+    for (let k = 0; k <= N; k++) {
+      const a = a0 + ((a1 - a0) * k) / N;
+      for (const dc of [-0.15, 0.15]) {
+        const p = at(run, s + a, off + c + dc, 0);
+        pos.push(p.x, p.y + prof.h(a) - 0.12, p.z);
+      }
+      if (k) idx.push((k - 1) * 2, (k - 1) * 2 + 1, k * 2, (k - 1) * 2 + 1, k * 2 + 1, k * 2);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setIndex(idx);
+    dye.push(g);
+  };
   // Small yellow marker block on the snow (h = snow built up there).
   // Fall-line slope (tan) under a feature: average over `len` meters.
   const slopeAt = (run, s, off, len) => {
@@ -683,9 +715,21 @@ export function buildParks(world) {
         const J = JUMPS[variant];
         const prof = jumpProfile(J, slopeAt(run, s, off, 30));
         snow.drape(run, s, off, J.W, prof);
-        jumps.push({ run, s, off, prof, size: variant });
+        // Where the lip is and which way it throws you, for the skier.
+        const l0 = at(run, s + prof.lip.x - 1.5, off, 0);
+        const l1 = at(run, s + prof.lip.x, off, 0);
+        const lipDir = new THREE.Vector3(l1.x - l0.x, 0, l1.z - l0.z).normalize();
+        jumps.push({ run, s, off, prof, size: variant, lipPos: new THREE.Vector3(l1.x, l1.y + J.H, l1.z), lipDir, lipAngle: prof.lip.angle, halfWidth: J.W / 2 });
         dyeLine(run, s, prof.lip.x - 0.2, off, J.W, prof);
         dyeLine(run, s, prof.knuckle, off, J.W, prof);
+        if (J.H >= 2.5) {
+          // Contest paint: the sweet spot, and both edges of lip and landing.
+          dyeLine(run, s, prof.sweet, off, J.W, prof);
+          for (const c of [-J.W / 2 + 0.25, J.W / 2 - 0.25]) {
+            dyeAlong(run, s, prof.lip.x * 0.35, prof.lip.x - 0.1, off, c, prof);
+            dyeAlong(run, s, prof.knuckle, prof.length - 2, off, c, prof);
+          }
+        }
         // Yellow markers either side of the lip; flags on the big ones.
         for (const side of [-1, 1]) marker(run, s + prof.lip.x - 0.4, off + side * (J.W / 2 + 0.6), J.H * 0.9);
         if (J.H >= 1.4) flag(run, s + prof.lip.x, off - J.W / 2 - 2, J.H * 0.7);
@@ -813,9 +857,13 @@ export function buildParks(world) {
     }
   };
 
+  // Lines built once go on the longest stretch of run with the park's name.
+  const longest = {};
+  for (const run of world.runs) if (PARKS[run.name] && (!longest[run.name] || run.length > longest[run.name].length)) longest[run.name] = run;
   for (const run of world.runs) {
     const cfg = PARKS[run.name];
     if (!cfg || run.length < 60) continue;
+    if (cfg.once && longest[run.name] !== run) continue;
     parks.push({ run, cfg });
 
     if (cfg.kind === 'pipe') {
@@ -826,10 +874,10 @@ export function buildParks(world) {
       continue; // tree runs have no banner
     } else {
       // The park line top to bottom, repeated if the run is long enough.
-      let s = 26;
+      let s = cfg.inrun || 26; // big lines get a longer drop-in for speed
       for (let k = 0; ; k++) {
         const row = cfg.line[k % cfg.line.length];
-        if (k >= cfg.line.length && k % cfg.line.length === 0 && run.length - s < 180) break;
+        if (k >= cfg.line.length && (cfg.once || (k % cfg.line.length === 0 && run.length - s < 180))) break;
         // Don't start a row that won't fit.
         const need = Math.max(...row.map(([t, v]) => (t === 'jump' ? jumpProfile(JUMPS[v], 0.25).length : 26)));
         if (s + need > run.length - 12) break;
